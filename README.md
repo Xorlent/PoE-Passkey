@@ -268,7 +268,7 @@ From the serial console: `unblock <ip>` (or `clear-blocks`). Consider whether `k
 
 ---
 
-## Before you rely on it
+## Notes
 
 - Anyone who taps a **valid registered key** can authorize the address they're on. Keep keys
   physically secure.
