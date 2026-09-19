@@ -92,7 +92,7 @@ Example, for
 
 ```bash
 # One command: ECDSA P-256 key + self-signed certificate with the SAN
-openssl.exe req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes \
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes \
   -keyout key.pem -out cert.pem -days 365 \
   -subj "/CN=passkey.vuln.plc.local" \
   -addext "subjectAltName=DNS:passkey.vuln.plc.local"
@@ -105,7 +105,7 @@ is trusted. In production it must be signed by a CA your clients already trust (
 or a public CA). Make the key and the signing request together, with the SAN already inside:
 
 ```bash
-openssl.exe req -new -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes \
+openssl req -new -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes \
   -keyout key.pem -out passkey.csr \
   -subj "/CN=passkey.vuln.plc.local" \
   -addext "subjectAltName=DNS:passkey.vuln.plc.local"
@@ -114,14 +114,14 @@ openssl.exe req -new -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes \
 Check the request carries the domain name (look for `X509v3 Subject Alternative Name`):
 
 ```bash
-openssl.exe req -in passkey.csr -noout -text
+openssl req -in passkey.csr -noout -text
 ```
 
 Send `passkey.csr` to your CA; they return the signed certificate to import with the key. If
 **you** are the CA, sign it and keep the SAN. OpenSSL 3.x copies it with `-copy_extensions`:
 
 ```bash
-openssl.exe x509 -req -in passkey.csr -CA ca.pem -CAkey ca.key -CAcreateserial \
+openssl x509 -req -in passkey.csr -CA ca.pem -CAkey ca.key -CAcreateserial \
   -out cert.pem -days 365 -copy_extensions copy
 ```
 
@@ -141,10 +141,10 @@ subjectAltName = DNS:passkey.vuln.plc.local
 ```
 
 ```bash
-openssl.exe req -new -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes \
+openssl req -new -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes \
   -keyout key.pem -out passkey.csr -config csr.cnf
 
-openssl.exe x509 -req -in passkey.csr -CA ca.pem -CAkey ca.key -CAcreateserial \
+openssl x509 -req -in passkey.csr -CA ca.pem -CAkey ca.key -CAcreateserial \
   -out cert.pem -days 365 -extfile csr.cnf -extensions ext
 ```
 
@@ -162,7 +162,7 @@ With no certificate/key, the device stops at boot and keeps the console open so 
 `import`. Check the served chain later with:
 
 ```bash
-openssl.exe s_client -connect <your-domain>:443 -servername <your-domain> -showcerts
+openssl s_client -connect <your-domain>:443 -servername <your-domain> -showcerts
 ```
 
 ### 4. Trust the certificate in the browser
