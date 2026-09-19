@@ -22,7 +22,7 @@ and memory utilization.
 ## What you need
 
 - The device [M5Stack **Unit-PoE-P4**](https://shop.m5stack.com/products/unit-poe-with-esp32-p4).
-- Arduino IDE (or `arduino-cli`) with the `esp32` board package.
+- [Arduino IDE](https://www.arduino.cc/en/software) with the `esp32 by Espressif Systems` board manager package.
 - A **TLS certificate and private key** for the device (see below).
 - At least one FIDO2 security key to register.
 - A computer whose IP address is in the admin list (see `kAdminIPs` in Config.h).
