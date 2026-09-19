@@ -86,8 +86,8 @@ Then, for each device:
 The device serves **HTTPS**, so it needs a trusted certificate and a private key. You must generate, 
 sign, then import them over the Arduino USB serial console on first boot and when renewing certificates.
 
-**Use an ECDSA P-256 key** (RSA won't fit alongside a certificate chain). The certificate must
-list the device's domain name in its **Subject Alternative Name (SAN)**. Example, for
+The certificate must be ECDSA and list the device's domain name in its **Subject Alternative Name (SAN)**.  
+Example, for
 `passkey.vuln.plc.local`:
 
 ```bash
