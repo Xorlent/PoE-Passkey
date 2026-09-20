@@ -1,5 +1,5 @@
 # PoE-Passkey
-![PoE-Passkey Image](https://github.com/Xorlent/PoE-Passkey/blob/main/images/PoE-Passkey.jpg)  
+![Cheesy PoE-Passkey AI Image](https://github.com/Xorlent/PoE-Passkey/blob/main/images/PoE-Passkey.jpg)  
 PoE-Passkey is designed for an M5Stack **Unit-PoE-P4**, a power-over-Ethernet device 
 that acts as a **hardware-key gate**. It turns tapping a security key (a YubiKey, Thetis Nano, or 
 compatible FIDO2/WebAuthn key) into a short-lived list of authorized IP addresses your firewall 
@@ -268,8 +268,10 @@ From the serial console: `unblock <ip>` (or `clear-blocks`). Consider whether `k
 
 ---
 
-## Notes
+## Notes and Limitations
 
+- Support for 256 registered keys, 256 active authenticated IP addresses
+- 16,384 entry real-time blocklist capacity
 - Anyone who taps a **valid registered key** can authorize the address they're on. Keep keys
   physically secure.
 - Enrollment is gated only by the admin's **source IP** (`kAdminIPs` in Config.h) - anyone on that trusted
