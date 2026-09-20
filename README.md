@@ -3,7 +3,17 @@
 PoE-Passkey is designed for an M5Stack **Unit-PoE-P4**, a power-over-Ethernet device 
 that acts as a **hardware-key gate**. It turns tapping a security key (a YubiKey, Thetis Nano, or 
 compatible FIDO2/WebAuthn key) into a short-lived list of authorized IP addresses your firewall 
-can use to dynamically allow connections to protected services/resources.
+can use to dynamically allow connections to protected services/resources.  
+
+---
+
+## Benefits
+- Ultra-low cost and complexity ($21.50 and 15 minutes)
+- True zero trust; no reliance on cloud providers or SaaS products
+- Deploy units anywhere you want a strict network access gateway
+- Can be used within a network and/or at the perimeter
+- Protects against zero-day RCE or authentication bypass vulnerabilities
+- Can be used to add multi-factor authentication to legacy systems
 
 ---
 
