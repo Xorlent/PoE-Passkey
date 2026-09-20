@@ -81,6 +81,10 @@ static const uint16_t kFailuresBeforeBlock = 3;
 // Block any non-admin IP that touches an admin route (GET /admin, /register/*, /admin/*)
 static const bool kBlockNonAdminIPOnAdminRoute = true;
 
+// Block any non-admin, non-consumer IP that requests a route that does not exist
+// Legitimate users are unlikely to trip this since their entry point is simply GET /
+static const bool kBlockScanners = true;
+
 ////////// Security gate: Ethernet-driver (L2) drop //////////
 
 // Drop over-budget / blocked SYNs in the Ethernet RX path before TLS (EthGate.h).
