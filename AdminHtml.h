@@ -48,6 +48,14 @@ static const char kAdminHtml[] = R"RAW(<!DOCTYPE html>
  #status.err{color:#b3261e}
  footer{margin-top:2em;border-top:1px solid #e3e3e3;padding-top:.75em;color:#555}
  a{color:#0b57d0}
+ .logrow{font-family:ui-monospace,monospace;font-size:.82em;padding:.15em 0;border-bottom:1px solid #f2f2f2;white-space:pre-wrap;word-break:break-word}
+ .logrow .t{color:#555;margin-right:.7em}
+ #aclAdmins,#aclConsumers{list-style:none;padding:0;margin:.3em 0}
+ #aclAdmins li,#aclConsumers li{display:flex;align-items:center;gap:.6em;padding:.25em 0;font-family:ui-monospace,monospace}
+ #aclAdminAdd,#aclConsumerAdd{max-width:14em}
+ .aclbox{margin-top:1.6em;padding:.4em 1em .9em;border:1px solid #ccc;border-radius:8px;background:#fafafa}
+ .aclcols{display:flex;flex-wrap:wrap;gap:1.6em}
+ .aclcol{flex:1 1 16em;min-width:16em}
 </style>
 </head>
 <body>
@@ -55,9 +63,10 @@ static const char kAdminHtml[] = R"RAW(<!DOCTYPE html>
 <p class="sub">Welcome admin from <strong id="ip">__CLIENT_IP__</strong></p>
 
 <nav role="tablist">
- <button id="tabEnroll" role="tab" aria-selected="true" aria-controls="panelEnroll">Enroll Key</button>
+ <button id="tabEnroll" role="tab" aria-selected="true" aria-controls="panelEnroll">Security</button>
  <button id="tabCreds" role="tab" aria-selected="false" aria-controls="panelCreds">Registered Keys</button>
  <button id="tabIps" role="tab" aria-selected="false" aria-controls="panelIps">Authorized IPs</button>
+ <button id="tabLogs" role="tab" aria-selected="false" aria-controls="panelLogs">Logs</button>
 </nav>
 
 <section id="panelEnroll" role="tabpanel" aria-labelledby="tabEnroll">
@@ -67,6 +76,25 @@ static const char kAdminHtml[] = R"RAW(<!DOCTYPE html>
  <label for="email">Email address</label>
  <input id="email" type="email" placeholder="admin@example.com" autocomplete="username">
  <div class="meta"><button id="regBtn" class="act">Enroll key</button></div>
+
+ <div class="aclbox">
+ <h2>Access control</h2>
+ <p>Manage which source IPs may use the admin routes and which may read the consumer
+    <code>/authorized-ips</code> endpoint. Changes apply immediately and persist across reboot.</p>
+ <div id="aclNote" class="meta"></div>
+ <div class="aclcols">
+  <div class="aclcol">
+   <h3>Admin IPs</h3>
+   <ul id="aclAdmins"></ul>
+   <div class="meta"><input id="aclAdminAdd" type="text" placeholder="192.168.1.x" autocomplete="off"><button id="aclAdminAddBtn" class="act">Add</button></div>
+  </div>
+  <div class="aclcol">
+   <h3>Consumer IPs</h3>
+   <ul id="aclConsumers"></ul>
+   <div class="meta"><input id="aclConsumerAdd" type="text" placeholder="192.168.1.x" autocomplete="off"><button id="aclConsumerAddBtn" class="act">Add</button></div>
+  </div>
+ </div>
+ </div>
 </section>
 
 <section id="panelCreds" role="tabpanel" aria-labelledby="tabCreds" hidden>
@@ -91,6 +119,12 @@ static const char kAdminHtml[] = R"RAW(<!DOCTYPE html>
   <tbody id="ipRows"></tbody>
  </table>
  <p id="ipMsg" class="meta"></p>
+</section>
+
+<section id="panelLogs" role="tabpanel" aria-labelledby="tabLogs" hidden>
+ <h2>Logs</h2>
+ <div class="meta"><span id="logCount">Loading...</span><button id="logRefresh" class="act">Refresh</button></div>
+ <div id="logList"></div>
 </section>
 
 <div id="status"></div>
@@ -135,7 +169,16 @@ const getJson = (url) => request(url, 'GET');
 const HINTS = {
   invalid_email: 'not a usable email address - check for a typo, a stray space or a missing domain',
   busy: 'no free ceremony slot (kMaxSessions) - retry shortly',
-  rate_limited: 'this IP is over its connection budget - retry shortly'
+  rate_limited: 'this IP is over its connection budget - retry shortly',
+  edits_disabled: 'runtime allowlist edits are disabled (kRuntimeAllowlistEdits = false)',
+  routable_not_allowed: 'that address is not in the allowed private range (kAdminIPsNonPublicOnly)',
+  allowlist_full: 'the allowlist is full - remove an entry first',
+  duplicate: 'that address is already in the list',
+  not_found: 'that address is not in the list',
+  cannot_remove_self: 'you cannot remove the address you are connecting from',
+  invalid_ip: 'not a valid IPv4 address',
+  invalid_list: 'list must be "admin" or "consumer"',
+  list_and_ip_required: 'both "list" and "ip" must be provided'
 };
 function explain(e) {
   for (const code in HINTS) {
@@ -148,6 +191,10 @@ let creds = [];
 let ips = [];
 let credsLoaded = false;
 let ipsLoaded = false;
+let logs = [];
+let logsLoaded = false;
+let acl = null;
+let aclLoaded = false;
 let enrolling = false;
 let credSort = 'newest';
 
@@ -156,8 +203,8 @@ function setStatus(msg, isError) {
   $('status').className = isError ? 'err' : '';
 }
 
-const TABS = ['Enroll', 'Creds', 'Ips'];
-const HASH = { Enroll: 'enroll', Creds: 'registered', Ips: 'ips' };
+const TABS = ['Enroll', 'Creds', 'Ips', 'Logs'];
+const HASH = { Enroll: 'enroll', Creds: 'registered', Ips: 'ips', Logs: 'logs' };
 
 function selectTab(name, focus) {
   for (const t of TABS) {
@@ -168,6 +215,8 @@ function selectTab(name, focus) {
   if (focus) { $('tab' + name).focus(); }
   if (name === 'Creds' && !credsLoaded) { loadCreds(); }
   if (name === 'Ips' && !ipsLoaded) { loadIps(); }
+  if (name === 'Logs' && !logsLoaded) { loadLogs(); }
+  if (name === 'Enroll' && !aclLoaded) { loadAcl(); }
   if (location.hash !== '#' + HASH[name]) { history.replaceState(null, '', '#' + HASH[name]); }
 }
 
@@ -421,6 +470,120 @@ async function loadIps() {
   }
 }
 
+function formatLogTime(unix) {
+  const d = new Date(unix * 1000);
+  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+
+function renderLogs() {
+  const list = $('logList');
+  list.textContent = '';
+  // The server returns oldest-first; show the newest entry at the top.
+  for (let i = logs.length - 1; i >= 0; --i) {
+    const e = logs[i];
+    const row = document.createElement('div');
+    row.className = 'logrow';
+    const when = document.createElement('span');
+    when.className = 't';
+    when.textContent = e.t > 0 ? formatLogTime(e.t) : '\u2014'; // em dash: clock not set yet
+    const msg = document.createElement('span');
+    msg.textContent = e.line;
+    row.append(when, msg);
+    list.appendChild(row);
+  }
+  $('logCount').textContent = logs.length === 0 ? 'No entries yet'
+    : logs.length + (logs.length === 1 ? ' entry' : ' entries');
+}
+
+async function loadLogs() {
+  try {
+    logs = await getJson('/admin/logs');
+    logsLoaded = true;
+    $('tabLogs').textContent = 'Logs (' + logs.length + ')';
+    renderLogs();
+  } catch (e) {
+    logsLoaded = false;
+    setStatus('Error: ' + explain(e), true);
+  }
+}
+
+function renderAcl() {
+  if (!acl) return;
+  const edits = acl.edits;
+  const admins = $('aclAdmins');
+  admins.textContent = '';
+  for (const ip of acl.admin) {
+    const li = document.createElement('li');
+    const s = document.createElement('span');
+    s.textContent = ip;
+    li.appendChild(s);
+    if (edits) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'act';
+      b.textContent = 'Remove';
+      b.addEventListener('click', () => aclRemove('admin', ip));
+      li.appendChild(b);
+    }
+    admins.appendChild(li);
+  }
+  const cons = $('aclConsumers');
+  cons.textContent = '';
+  for (const ip of acl.consumer) {
+    const li = document.createElement('li');
+    const s = document.createElement('span');
+    s.textContent = ip;
+    li.appendChild(s);
+    if (edits) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'act';
+      b.textContent = 'Remove';
+      b.addEventListener('click', () => aclRemove('consumer', ip));
+      li.appendChild(b);
+    }
+    cons.appendChild(li);
+  }
+  $('aclAdminAdd').hidden = !edits;
+  $('aclAdminAddBtn').hidden = !edits;
+  $('aclConsumerAdd').hidden = !edits;
+  $('aclConsumerAddBtn').hidden = !edits;
+  $('aclNote').textContent = edits ? '' : 'Runtime allowlist edits are disabled (kRuntimeAllowlistEdits = false).';
+}
+
+async function loadAcl() {
+  try {
+    acl = await getJson('/admin/acl');
+    aclLoaded = true;
+    renderAcl();
+  } catch (e) {
+    aclLoaded = false;
+    setStatus('Error: ' + explain(e), true);
+  }
+}
+
+async function aclAdd(list, ip) {
+  setStatus('Adding ' + ip + ' to ' + list + '...', false);
+  try {
+    await postJson('/admin/acl-add', { list: list, ip: ip });
+    setStatus('Added ' + ip + ' to ' + list + '.', false);
+    await loadAcl();
+  } catch (e) {
+    setStatus('Error: ' + explain(e), true);
+  }
+}
+
+async function aclRemove(list, ip) {
+  setStatus('Removing ' + ip + ' from ' + list + '...', false);
+  try {
+    await postJson('/admin/acl-remove', { list: list, ip: ip });
+    setStatus('Removed ' + ip + ' from ' + list + '.', false);
+    await loadAcl();
+  } catch (e) {
+    setStatus('Error: ' + explain(e), true);
+  }
+}
+
 async function reloadAfterKeyChange() {
   await loadCreds();
   if (ipsLoaded) { await loadIps(); }
@@ -465,6 +628,17 @@ async function setDisabled(id, disabled) {
 $('regBtn').addEventListener('click', enroll);
 $('credRefresh').addEventListener('click', loadCreds);
 $('ipRefresh').addEventListener('click', loadIps);
+$('logRefresh').addEventListener('click', loadLogs);
+$('aclAdminAddBtn').addEventListener('click', () => {
+  const v = $('aclAdminAdd').value.trim();
+  if (v) aclAdd('admin', v);
+  $('aclAdminAdd').value = '';
+});
+$('aclConsumerAddBtn').addEventListener('click', () => {
+  const v = $('aclConsumerAdd').value.trim();
+  if (v) aclAdd('consumer', v);
+  $('aclConsumerAdd').value = '';
+});
 $('credSearch').addEventListener('input', renderCreds);
 $('ipSearch').addEventListener('input', renderIps);
 $('credSortBtn').addEventListener('click', () => {
@@ -482,7 +656,7 @@ for (const [i, t] of TABS.entries()) {
 }
 
 const fromHash = (location.hash || '').replace('#', '').toLowerCase();
-selectTab(fromHash === 'registered' ? 'Creds' : (fromHash === 'ips' ? 'Ips' : 'Enroll'), false);
+selectTab(fromHash === 'registered' ? 'Creds' : (fromHash === 'ips' ? 'Ips' : (fromHash === 'logs' ? 'Logs' : 'Enroll')), false);
 </script>
 </body>
 </html>

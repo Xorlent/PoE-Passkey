@@ -6,6 +6,7 @@
 #include "PasskeyStore.h"
 #include "Crypto.h"
 #include "Clock.h"
+#include "Log.h"
 
 #include <Arduino.h>
 #include <Preferences.h>
@@ -741,23 +742,23 @@ void store_begin() {
     // failure (otherwise it's invisible until an enrollment fails).
     esp_err_t err = nvs_flash_init_partition(NVS_PART);
     if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-        Serial.printf("[store] credential partition %s must be formatted (%s): erasing\n",
+        Log.printf("[store] credential partition %s must be formatted (%s): erasing\n",
                       NVS_PART, esp_err_to_name(err));
         nvs_flash_erase_partition(NVS_PART);
         err = nvs_flash_init_partition(NVS_PART);
     }
     if (err != ESP_OK) {
-        Serial.printf("[store] FATAL: credential partition %s is not available (%s). Enrollment "
+        Log.printf("[store] FATAL: credential partition %s is not available (%s). Enrollment "
                       "and authentication will fail until this build's partitions.csv is flashed "
                       "(the table needs an entry named %s).\n",
                       NVS_PART, esp_err_to_name(err), NVS_PART);
     } else if (!s_nvs.begin(NVS_NS, false, NVS_PART)) {
-        Serial.printf("[store] FATAL: could not open namespace %s on partition %s.\n",
+        Log.printf("[store] FATAL: could not open namespace %s on partition %s.\n",
                       NVS_NS, NVS_PART);
     } else {
         const esp_partition_t* part = esp_partition_find_first(
             ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_NVS, NVS_PART);
-        Serial.printf("[store] credentials live on NVS partition %s (%u KB)\n",
+        Log.printf("[store] credentials live on NVS partition %s (%u KB)\n",
                       NVS_PART, part ? (unsigned)(part->size / 1024) : 0);
     }
 
@@ -767,13 +768,13 @@ void store_begin() {
     s_index = (CredIndexEntry*)heap_caps_malloc(indexBytes, MALLOC_CAP_SPIRAM);
     if (s_index == nullptr) {
         indexInPsram = false;
-        Serial.printf("[store] PSRAM unavailable for the credential index (%u B); falling back "
+        Log.printf("[store] PSRAM unavailable for the credential index (%u B); falling back "
                       "to internal RAM\n", (unsigned)indexBytes);
         s_index = (CredIndexEntry*)malloc(indexBytes);
     }
 
     if (s_index == nullptr) {
-        Serial.printf("[store] no memory for the credential index (%u B): every credential "
+        Log.printf("[store] no memory for the credential index (%u B): every credential "
                       "lookup will scan all %u slots\n",
                       (unsigned)indexBytes, (unsigned)kMaxCredentials);
     } else {
@@ -784,7 +785,7 @@ void store_begin() {
             if (s_index[i].digest != 0) ++used;
         }
         portEXIT_CRITICAL(&s_indexLock);
-        Serial.printf("[store] credential index ready: %u of %u slots used (%u B in %s)\n",
+        Log.printf("[store] credential index ready: %u of %u slots used (%u B in %s)\n",
                       (unsigned)used, (unsigned)kMaxCredentials, (unsigned)indexBytes,
                       indexInPsram ? "PSRAM" : "internal RAM");
     }

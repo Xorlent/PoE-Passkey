@@ -6,6 +6,7 @@
 
 #include "EthGate.h"
 #include "FrontDoor.h"
+#include "Log.h"
 
 #include <Arduino.h>
 #include <esp_log.h>
@@ -176,7 +177,7 @@ bool eth_gate_begin(esp_eth_handle_t ethHandle, esp_netif_t* netif, uint16_t pro
     // Plain form first, *_info form last (the one this MAC invokes; it must stay).
     esp_err_t err = esp_eth_update_input_path(ethHandle, eth_gate_input, nullptr);
     if (err != ESP_OK) {
-        Serial.printf("[gate] esp_eth_update_input_path failed: %d\n", (int)err);
+        Log.printf("[gate] esp_eth_update_input_path failed: %d\n", (int)err);
     }
     err = esp_eth_update_input_path_info(ethHandle, eth_gate_input_info, nullptr);
     if (err != ESP_OK) {

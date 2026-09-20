@@ -14,6 +14,8 @@
 #include <stddef.h>
 #include <string.h>
 
+#include "Log.h"
+
 // Print exactly `n` bytes (need not be NUL-terminated), capped at `maxChars` printed chars.
 static void safe_print_range(const char* s, size_t n, size_t maxChars) {
     size_t used = 0;
@@ -21,15 +23,15 @@ static void safe_print_range(const char* s, size_t n, size_t maxChars) {
     for (; i < n && used < maxChars; ++i) {
         const unsigned char c = (unsigned char)s[i];
         if (c >= 0x20 && c < 0x7F) {
-            Serial.print((char)c);
+            Log.print((char)c);
             ++used;
         } else {
-            Serial.printf("\\x%02X", (unsigned)c);
+            Log.printf("\\x%02X", (unsigned)c);
             used += 4;
         }
     }
     if (i < n) {
-        Serial.print("[...]");
+        Log.print("[...]");
     }
 }
 

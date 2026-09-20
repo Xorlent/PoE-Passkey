@@ -15,6 +15,7 @@
 #include "FrontDoor.h"
 #include "PasskeyStore.h"
 #include "SafePrint.h"
+#include "Log.h"
 
 #include <Arduino.h>
 #include <string.h>
@@ -33,19 +34,19 @@ static char s_pem_out[MAX_CERT_PEM_LEN + 1];
 static const uint32_t kPemQuietMs = 500;
 
 static void print_help() {
-    Serial.println("Commands:");
-    Serial.println("  import        import the TLS certificate and private key (prompts for both)");
-    Serial.println("  status        show TLS material status");
-    Serial.println("  clear-cert    remove the imported certificate");
-    Serial.println("  clear-key     remove the imported private key");
-    Serial.println("  stats         show heap, socket table and L2 gate telemetry");
-    Serial.println("  selftest      run the crypto self-test (P-256 point validation + ES256)");
-    Serial.println("  creds         list stored passkeys (and how full the store is)");
-    Serial.println("  blocks        list blocked IPs (each block also logs its reason)");
-    Serial.println("  unblock <ip>  remove one IP from the blocklist");
-    Serial.println("  clear-blocks  remove every blocked IP");
-    Serial.println("  reboot        restart the device");
-    Serial.println("  help          this list");
+    Log.println("Commands:");
+    Log.println("  import        import the TLS certificate and private key (prompts for both)");
+    Log.println("  status        show TLS material status");
+    Log.println("  clear-cert    remove the imported certificate");
+    Log.println("  clear-key     remove the imported private key");
+    Log.println("  stats         show heap, socket table and L2 gate telemetry");
+    Log.println("  selftest      run the crypto self-test (P-256 point validation + ES256)");
+    Log.println("  creds         list stored passkeys (and how full the store is)");
+    Log.println("  blocks        list blocked IPs (each block also logs its reason)");
+    Log.println("  unblock <ip>  remove one IP from the blocklist");
+    Log.println("  clear-blocks  remove every blocked IP");
+    Log.println("  reboot        restart the device");
+    Log.println("  help          this list");
 }
 
 // Heap headroom, labelled with the moment it was sampled. Internal RAM is what
@@ -55,7 +56,7 @@ void memory_report(const char* when) {
     // page buffer, ceremony arena), so say plainly when it is missing instead of leaving
     // the reader to notice that "0 / 0 B" is not a reading.
     const size_t psramTotal = heap_caps_get_total_size(MALLOC_CAP_SPIRAM);
-    Serial.printf(
+    Log.printf(
         "Memory [%s]: internal free %u B (low-water %u B), PSRAM free %u / %u B%s\n",
         when ? when : "now",
         (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
@@ -74,7 +75,7 @@ static int read_pem(char* buf, size_t cap, uint32_t quietMs) {
     uint32_t lastReport = millis();
     uint32_t lastByteMs = 0;
 
-    Serial.println("Reading... (paste the PEM now)");
+    Log.println("Reading... (paste the PEM now)");
 
     // The bound is checked inside the drain (a fast USB burst would otherwise overrun `buf`).
     while (len < cap - 1) {
@@ -92,7 +93,7 @@ static int read_pem(char* buf, size_t cap, uint32_t quietMs) {
 
         // Progress so the user can see the firmware is still receiving.
         if (len > 0 && (millis() - lastReport) > 2000) {
-            Serial.printf("  (%u bytes received so far)\n", (unsigned)len);
+            Log.printf("  (%u bytes received so far)\n", (unsigned)len);
             lastReport = millis();
         }
 
@@ -101,12 +102,12 @@ static int read_pem(char* buf, size_t cap, uint32_t quietMs) {
             // One complete block is present. Either that is the whole paste (quietMs == 0),
             // or the paste has gone quiet - which is how a chain's later blocks join it.
             if (quietMs == 0 || (lastByteMs != 0 && (millis() - lastByteMs) >= quietMs)) {
-                Serial.printf("Received %u bytes.\n", (unsigned)len);
+                Log.printf("Received %u bytes.\n", (unsigned)len);
                 return (int)len;
             }
         }
         if (millis() - start > 60000) { // 60-second timeout
-            Serial.printf("Timed out after %u bytes. BEGIN marker: %s, END marker: %s\n",
+            Log.printf("Timed out after %u bytes. BEGIN marker: %s, END marker: %s\n",
                           (unsigned)len,
                           strstr(buf, "-----BEGIN ") ? "found" : "MISSING",
                           strstr(buf, "-----END ") ? "found" : "MISSING");
@@ -120,7 +121,7 @@ static int read_pem(char* buf, size_t cap, uint32_t quietMs) {
     while (Serial.available()) {
         Serial.read();
     }
-    Serial.printf("PEM too large: %u bytes is the most this buffer holds (one certificate or "
+    Log.printf("PEM too large: %u bytes is the most this buffer holds (one certificate or "
                   "key). Paste a shorter chain, or put the PEM in Config.h instead.\n",
                   (unsigned)(cap - 1));
     return -1;
@@ -189,27 +190,27 @@ static void do_import() {
     // 1. Certificate. One paste may carry the whole chain - leaf first, then any
     // intermediates - because that is what a client needs when the leaf is not signed by a
     // directly-trusted root. The read finishes when the paste goes quiet (kPemQuietMs).
-    Serial.println("Paste the certificate PEM (leaf first; intermediates after it, if any):");
+    Log.println("Paste the certificate PEM (leaf first; intermediates after it, if any):");
     int n = read_pem(s_pem_raw, MAX_CERT_PEM_LEN, kPemQuietMs);
     if (n < 0) {
-        Serial.println("Import aborted (timeout or too large).");
+        Log.println("Import aborted (timeout or too large).");
         return;
     }
     size_t pl = normalize_pem(s_pem_raw, (size_t)n, s_pem_out, MAX_CERT_PEM_LEN, true);
     if (pl == 0) {
-        Serial.println("Invalid certificate PEM (missing BEGIN/END markers). Import aborted.");
+        Log.println("Invalid certificate PEM (missing BEGIN/END markers). Import aborted.");
         return;
     }
     // Refuse the wrong KIND of PEM here, rather than storing it and letting the server fail to
     // start: the realistic way to get it wrong is pasting a chain in two steps, which leaves
     // the intermediate in the input buffer for the KEY prompt below.
     if (strstr(s_pem_out, "CERTIFICATE-----") == nullptr) {
-        Serial.println("That is not a certificate PEM (expected -----BEGIN CERTIFICATE-----). "
+        Log.println("That is not a certificate PEM (expected -----BEGIN CERTIFICATE-----). "
                        "Import aborted.");
         return;
     }
     if (!certstore_save_cert(s_pem_out, pl)) {
-        Serial.println("Failed to save certificate. Import aborted.");
+        Log.println("Failed to save certificate. Import aborted.");
         return;
     }
     // Say how much was stored, not just that it worked: a chain that arrived incomplete
@@ -218,38 +219,38 @@ static void do_import() {
     for (const char* q = s_pem_out; (q = strstr(q, "-----BEGIN ")) != nullptr; q += 11) {
         ++blocks;
     }
-    Serial.printf("Certificate saved: %u PEM block(s), %u bytes.\n",
+    Log.printf("Certificate saved: %u PEM block(s), %u bytes.\n",
                   (unsigned)blocks, (unsigned)pl);
 
     // 2. Private key. One block, and the read finishes at its END marker (quietMs 0) so a
     // second block in the paste - the EC PARAMETERS an `openssl ecparam -genkey` key file
     // carries - cannot be swallowed into the key.
-    Serial.println("Paste the private key PEM and press Enter:");
+    Log.println("Paste the private key PEM and press Enter:");
     n = read_pem(s_pem_raw, MAX_KEY_PEM_LEN, 0);
     if (n < 0) {
-        Serial.println("Import aborted (timeout or too large). Certificate was saved.");
+        Log.println("Import aborted (timeout or too large). Certificate was saved.");
         return;
     }
     pl = normalize_pem(s_pem_raw, (size_t)n, s_pem_out, MAX_KEY_PEM_LEN, false);
     if (pl == 0) {
-        Serial.println("Invalid private key PEM (missing BEGIN/END markers). Import aborted.");
+        Log.println("Invalid private key PEM (missing BEGIN/END markers). Import aborted.");
         return;
     }
     // Matches PKCS#8 ("BEGIN PRIVATE KEY"), SEC1 ("BEGIN EC PRIVATE KEY") and the legacy RSA
     // form - but not a certificate, which is what a chain pasted in two steps would leave here.
     if (strstr(s_pem_out, "PRIVATE KEY-----") == nullptr) {
-        Serial.println("That is not a private key PEM (expected -----BEGIN PRIVATE KEY----- or "
+        Log.println("That is not a private key PEM (expected -----BEGIN PRIVATE KEY----- or "
                        "-----BEGIN EC PRIVATE KEY-----). Import aborted.");
         return;
     }
     if (!certstore_save_key(s_pem_out, pl)) {
-        Serial.println("Failed to save private key. Import aborted.");
+        Log.println("Failed to save private key. Import aborted.");
         return;
     }
-    Serial.printf("Private key saved: %u bytes.\n", (unsigned)pl);
+    Log.printf("Private key saved: %u bytes.\n", (unsigned)pl);
 
     // 3. Done -> reboot.
-    Serial.println("All TLS material imported. Rebooting in 3 seconds...");
+    Log.println("All TLS material imported. Rebooting in 3 seconds...");
     delay(3000);
     ESP.restart();
 }
@@ -266,9 +267,9 @@ static bool print_credential(const StoredCredential* c, const CredRuntime* rt, v
     const char* boot = (rt->usedThisBoot < 0) ? "boot state unknown"
                                               : (rt->usedThisBoot ? "used this boot" : "not used this boot");
     // Sanitized: a corrupt/foreign blob need not obey the enrollment whitelist.
-    Serial.printf("  %u: ", (unsigned)++st->shown);
+    Log.printf("  %u: ", (unsigned)++st->shown);
     safe_print(c->email, MAX_EMAIL_LEN);
-    Serial.printf(" (%s, %s", ever, boot);
+    Log.printf(" (%s, %s", ever, boot);
 
     // Last-used date in UTC (the device has no timezone).
     if (rt->lastSeenUnix) {
@@ -276,20 +277,20 @@ static bool print_credential(const StoredCredential* c, const CredRuntime* rt, v
         struct tm tmv;
         char text[32];
         if (gmtime_r(&when, &tmv) && strftime(text, sizeof(text), "%Y-%m-%d %H:%MZ", &tmv)) {
-            Serial.printf(", last %s", text);
+            Log.printf(", last %s", text);
         }
     }
-    Serial.printf("%s)\n", rt->disabled ? ", DISABLED" : "");
+    Log.printf("%s)\n", rt->disabled ? ", DISABLED" : "");
     return true;
 }
 
 static void print_credentials() {
     CredListing st = { 0 };
-    Serial.printf("Credentials: %u of %u slots used\n", (unsigned)cred_count(),
+    Log.printf("Credentials: %u of %u slots used\n", (unsigned)cred_count(),
                   (unsigned)kMaxCredentials);
     cred_foreach(print_credential, &st);
     if (st.shown == 0) {
-        Serial.println("  (none - open the admin page and register a passkey)");
+        Log.println("  (none - open the admin page and register a passkey)");
     }
 }
 
@@ -405,10 +406,10 @@ bool run_selftest() {
     }
 
     if (failures == 0) {
-        Serial.println("[selftest] elliptic curve test: PASS");
+        Log.println("[selftest] elliptic curve test: PASS");
         return true;
     }
-    Serial.println("[selftest] elliptic curve test: FAIL");
+    Log.println("[selftest] elliptic curve test: FAIL");
     return false;
 }
 
@@ -424,8 +425,8 @@ void serial_console_poll() {
     } else if (cmd == "import") {
         do_import();
     } else if (cmd == "status") {
-        Serial.printf("Certificate (NVS):     %s\n", certstore_has_cert() ? "present" : "absent");
-        Serial.printf("Private key (NVS):     %s\n", certstore_has_key() ? "present" : "absent");
+        Log.printf("Certificate (NVS):     %s\n", certstore_has_cert() ? "present" : "absent");
+        Log.printf("Private key (NVS):     %s\n", certstore_has_key() ? "present" : "absent");
 
         // The clock, because every "last used" date in the credential store is only as good as
         // this: say whether the device knows the time, what it believes it is, and where that
@@ -433,7 +434,7 @@ void serial_console_poll() {
         // instead of dates.
         uint32_t unixNow = 0;
         if (!clock_now(&unixNow)) {
-            Serial.println("Device time:           UNKNOWN (no NTP sync, nothing in the RTC) - "
+            Log.println("Device time:           UNKNOWN (no NTP sync, nothing in the RTC) - "
                            "last-used dates are NOT being recorded");
         } else {
             const time_t when = (time_t)unixNow;
@@ -444,10 +445,10 @@ void serial_console_poll() {
             }
             const uint32_t lastSyncMs = clock_last_sync_ms();
             if (lastSyncMs) {
-                Serial.printf("Device time (NTP):     %s (%u s since the last sync)\n", text,
+                Log.printf("Device time (NTP):     %s (%u s since the last sync)\n", text,
                               (unsigned)((millis() - lastSyncMs) / 1000));
             } else {
-                Serial.printf("Device time (RTC):     %s (NTP has not answered yet this boot)\n",
+                Log.printf("Device time (RTC):     %s (NTP has not answered yet this boot)\n",
                               text);
             }
         }
@@ -459,10 +460,10 @@ void serial_console_poll() {
         const char* pem = certstore_cert(&cl);
         if (pem && cl) {
             char fp[64];
-            Serial.printf("Serving:               cert %u B, SHA-1 %s\n", (unsigned)cl,
+            Log.printf("Serving:               cert %u B, SHA-1 %s\n", (unsigned)cl,
                           certstore_cert_fingerprint(pem, cl, fp, sizeof(fp)) ? fp : "(unparseable)");
         } else {
-            Serial.println("Serving:               no certificate (httpd_ssl will not start)");
+            Log.println("Serving:               no certificate (httpd_ssl will not start)");
         }
     } else if (cmd == "creds") {
         print_credentials();
@@ -479,56 +480,56 @@ void serial_console_poll() {
         if (eth_gate_active()) {
             uint32_t frames = 0, charged = 0, refused = 0;
             eth_gate_stats(&frames, &charged, &refused);
-            Serial.printf("L2 gate:        active, %u frames seen, %u SYNs charged, %u SYNs refused\n",
+            Log.printf("L2 gate:        active, %u frames seen, %u SYNs charged, %u SYNs refused\n",
                           (unsigned)frames, (unsigned)charged, (unsigned)refused);
         } else {
-            Serial.println("L2 gate:        inactive (request-level gate only)");
+            Log.println("L2 gate:        inactive (request-level gate only)");
         }
-        Serial.printf("Blocklist:      %u of %u IP(s) blocked (see 'blocks')\n",
+        Log.printf("Blocklist:      %u of %u IP(s) blocked (see 'blocks')\n",
                       (unsigned)frontdoor_blocklist_count(),
                       (unsigned)kBlocklistMaxEntries);
     } else if (cmd == "blocks") {
         const uint16_t total = frontdoor_blocklist_count();
         if (total == 0) {
-            Serial.println("Blocklist is empty.");
+            Log.println("Blocklist is empty.");
         } else {
             // Static, not on the loopTask stack (see the note above the PEM buffers);
             // the list is capped for display - `total` still reports the real count.
             static uint32_t ips[32];
             const uint16_t shown = frontdoor_blocklist_snapshot(ips, 32);
-            Serial.printf("Blocked IPs (%u):\n", (unsigned)total);
+            Log.printf("Blocked IPs (%u):\n", (unsigned)total);
             for (uint16_t i = 0; i < shown; ++i) {
                 IPAddress a(ips[i]);
-                Serial.printf("  %s\n", a.toString().c_str());
+                Log.printf("  %s\n", a.toString().c_str());
             }
             if (total > shown) {
-                Serial.printf("  ... and %u more\n", (unsigned)(total - shown));
+                Log.printf("  ... and %u more\n", (unsigned)(total - shown));
             }
-            Serial.println("Remove one with 'unblock <ip>', all with 'clear-blocks'.");
+            Log.println("Remove one with 'unblock <ip>', all with 'clear-blocks'.");
         }
     } else if (cmd.startsWith("unblock ")) {
         String arg = cmd.substring(8);
         arg.trim();
         IPAddress addr;
         if (!addr.fromString(arg)) {
-            Serial.println("Usage: unblock <ipv4 address>   (list them with 'blocks')");
+            Log.println("Usage: unblock <ipv4 address>   (list them with 'blocks')");
         } else if (frontdoor_unblock_ip((uint32_t)addr)) {
-            Serial.println("Unblocked. That host can reconnect now.");
+            Log.println("Unblocked. That host can reconnect now.");
         } else {
-            Serial.println("That IP is not on the blocklist.");
+            Log.println("That IP is not on the blocklist.");
         }
     } else if (cmd == "clear-blocks") {
         frontdoor_clear_blocklist();
-        Serial.println("Blocklist cleared. Every previously blocked host can reconnect.");
+        Log.println("Blocklist cleared. Every previously blocked host can reconnect.");
     } else if (cmd == "clear-cert") {
-        Serial.println(certstore_clear_cert() ? "Certificate cleared." : "No certificate to clear.");
+        Log.println(certstore_clear_cert() ? "Certificate cleared." : "No certificate to clear.");
     } else if (cmd == "clear-key") {
-        Serial.println(certstore_clear_key() ? "Private key cleared." : "No key to clear.");
+        Log.println(certstore_clear_key() ? "Private key cleared." : "No key to clear.");
     } else if (cmd == "reboot") {
-        Serial.println("Rebooting...");
+        Log.println("Rebooting...");
         delay(100);
         ESP.restart();
     } else {
-        Serial.println("Unknown command. Type 'help'.");
+        Log.println("Unknown command. Type 'help'.");
     }
 }

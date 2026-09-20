@@ -11,6 +11,7 @@
 #include "CborLite.h"
 #include "PasskeyStore.h"
 #include "SafePrint.h"
+#include "Log.h"
 
 #include <Arduino.h>
 #include <string.h>
@@ -26,7 +27,7 @@ static const bool kWebAuthnFailureLog = true;
 #define WA_FAIL(stage)                                                     \
     do {                                                                   \
         if (kWebAuthnFailureLog) {                                         \
-            Serial.printf("[webauthn] %s: %s\n", __func__, (stage));       \
+            Log.printf("[webauthn] %s: %s\n", __func__, (stage));       \
         }                                                                  \
         return false;                                                      \
     } while (0)
@@ -45,7 +46,7 @@ struct Scratch {
             static bool reported = false;
             if (!reported) {
                 reported = true;
-                Serial.printf("[webauthn] PSRAM unavailable for the %u B scratch arena; using internal RAM\n",
+                Log.printf("[webauthn] PSRAM unavailable for the %u B scratch arena; using internal RAM\n",
                               (unsigned)c);
             }
             mem = (uint8_t*)malloc(c);
@@ -89,7 +90,7 @@ static void* scratch_take(Scratch& s, size_t n) {
         static bool logged = false;
         if (!logged) {
             logged = true;
-            Serial.printf("[webauthn] scratch arena exhausted (%u + %u > %u); ceremony refused\n",
+            Log.printf("[webauthn] scratch arena exhausted (%u + %u > %u); ceremony refused\n",
                           (unsigned)s.used, (unsigned)n, (unsigned)s.cap);
         }
         return nullptr;
@@ -345,8 +346,10 @@ static bool parse_cose_key(const uint8_t* d, size_t n, uint8_t x[32], uint8_t y[
     }
 
     if (!haveKty || !haveAlg || !haveCrv || !haveX || !haveY) return false;
-    // Reject trailing bytes: the COSE key must be exactly this map, nothing after it.
-    return (kty == 2 && alg == -7 && crv == 1) && (pos == n);
+    // The buffer handed here is "everything after the credential ID" in authData; when
+    // the ED (extension) flag is set it legitimately carries extension data after the
+    // COSE map, so we deliberately do NOT require the map to consume the whole buffer.
+    return (kty == 2 && alg == -7 && crv == 1);
 }
 
 // ---------------------------------------------------------------------------
@@ -449,7 +452,7 @@ bool webauthn_register_finish(const char* body, size_t bodyLen) {
     int idbL = json_get_str(b, bodyLen, "id", idb, kIdB64Cap);
     if (cdbL < 0 || aobL < 0 || idbL < 0) {
         if (kWebAuthnFailureLog) {
-            Serial.printf("[webauthn] %s: JSON field missing or oversized "
+            Log.printf("[webauthn] %s: JSON field missing or oversized "
                           "(clientDataJSON=%d attestationObject=%d id=%d; "
                           "-1 = absent or longer than its cap)\n", __func__, cdbL, aobL, idbL);
         }
@@ -463,7 +466,7 @@ bool webauthn_register_finish(const char* body, size_t bodyLen) {
     // than 255 bytes could not be recorded faithfully (it would wrap): refuse it.
     if (cdLen < 0 || attLen < 0 || idLen <= 0 || idLen > MAX_STORED_CRED_ID_LEN) {
         if (kWebAuthnFailureLog) {
-            Serial.printf("[webauthn] %s: base64url decode failed "
+            Log.printf("[webauthn] %s: base64url decode failed "
                           "(clientData=%d attestationObject=%d id=%d; id must be 1..%d)\n",
                           __func__, cdLen, attLen, idLen, (int)MAX_STORED_CRED_ID_LEN);
         }
@@ -484,18 +487,18 @@ bool webauthn_register_finish(const char* body, size_t bodyLen) {
             // clientDataJSON, printed for the operator. They go through safe_print() so a
             // terminal escape or an embedded newline cannot rewrite the console (the values
             // themselves are already bounded by json_get_str's caps).
-            Serial.printf("[webauthn] %s: clientDataJSON.type is not \"webauthn.create\" ('",
+            Log.printf("[webauthn] %s: clientDataJSON.type is not \"webauthn.create\" ('",
                           __func__);
             safe_print((tl > 0) ? typeStr : "", 32);
-            Serial.printf("')\n");
+            Log.printf("')\n");
         }
         return false;
     }
     if (ol != (int)strlen(kOrigin) || memcmp(originStr, kOrigin, ol) != 0) {
         if (kWebAuthnFailureLog) {
-            Serial.printf("[webauthn] %s: clientDataJSON.origin '", __func__);
+            Log.printf("[webauthn] %s: clientDataJSON.origin '", __func__);
             safe_print((ol > 0) ? originStr : "", 64);
-            Serial.printf("' != kOrigin '%s'\n", kOrigin);
+            Log.printf("' != kOrigin '%s'\n", kOrigin);
         }
         return false;
     }
@@ -508,7 +511,7 @@ bool webauthn_register_finish(const char* body, size_t bodyLen) {
     RegistrationSession rec;
     if (!registration_consume(challenge, &rec)) {
         if (kWebAuthnFailureLog) {
-            Serial.printf("[webauthn] %s: no live registration for this challenge "
+            Log.printf("[webauthn] %s: no live registration for this challenge "
                           "(never issued, already consumed, or older than %u ms)\n",
                           __func__, (unsigned)kSessionTtlMs);
         }
@@ -520,7 +523,7 @@ bool webauthn_register_finish(const char* body, size_t bodyLen) {
     size_t authDataLen;
     if (!parse_attestation(attObj, attLen, &fmtNone, &authData, &authDataLen)) {
         if (kWebAuthnFailureLog) {
-            Serial.printf("[webauthn] %s: could not parse the attestationObject (%d bytes) - "
+            Log.printf("[webauthn] %s: could not parse the attestationObject (%d bytes) - "
                           "expected a CBOR map with fmt/attStmt/authData\n", __func__, attLen);
         }
         return false;
@@ -539,7 +542,7 @@ bool webauthn_register_finish(const char* body, size_t bodyLen) {
     if (!parse_authdata_reg(authData, authDataLen, &rpIdHash, &flags, &signCount,
                             &aCredId, &aCredIdLen, &coseKey, &coseKeyLen)) {
         if (kWebAuthnFailureLog) {
-            Serial.printf("[webauthn] %s: authenticatorData is malformed or has no attested "
+            Log.printf("[webauthn] %s: authenticatorData is malformed or has no attested "
                           "credential data (%u bytes; AT flag + AAGUID/credId/COSE key)\n",
                           __func__, (unsigned)authDataLen);
         }
@@ -550,7 +553,7 @@ bool webauthn_register_finish(const char* body, size_t bodyLen) {
     crypto_sha256((const uint8_t*)kRpId, strlen(kRpId), expectRp);
     if (!crypto_const_eq(rpIdHash, expectRp, 32)) {
         if (kWebAuthnFailureLog) {
-            Serial.printf("[webauthn] %s: rpIdHash mismatch - the authenticator attested for "
+            Log.printf("[webauthn] %s: rpIdHash mismatch - the authenticator attested for "
                           "RP ID %02x%02x%02x%02x..., SHA-256(kRpId='%s') is %02x%02x%02x%02x...\n",
                           __func__, rpIdHash[0], rpIdHash[1], rpIdHash[2], rpIdHash[3],
                           kRpId, expectRp[0], expectRp[1], expectRp[2], expectRp[3]);
@@ -561,7 +564,7 @@ bool webauthn_register_finish(const char* body, size_t bodyLen) {
 
     if (aCredIdLen != (size_t)idLen || !crypto_const_eq(aCredId, credId, idLen)) {
         if (kWebAuthnFailureLog) {
-            Serial.printf("[webauthn] %s: the credential id inside authenticatorData (%u bytes) "
+            Log.printf("[webauthn] %s: the credential id inside authenticatorData (%u bytes) "
                           "differs from the id in the response (%d bytes)\n",
                           __func__, (unsigned)aCredIdLen, idLen);
         }
@@ -571,7 +574,7 @@ bool webauthn_register_finish(const char* body, size_t bodyLen) {
     uint8_t x[32], y[32];
     if (!parse_cose_key(coseKey, coseKeyLen, x, y)) {
         if (kWebAuthnFailureLog) {
-            Serial.printf("[webauthn] %s: the COSE public key (%u bytes) is malformed or not "
+            Log.printf("[webauthn] %s: the COSE public key (%u bytes) is malformed or not "
                           "ES256/P-256 (kty 2, crv 1)\n", __func__, (unsigned)coseKeyLen);
         }
         return false;
@@ -582,7 +585,7 @@ bool webauthn_register_finish(const char* body, size_t bodyLen) {
     // signature forgeable without any private key.
     if (!crypto_p256_pubkey_valid(x, y)) {
         if (kWebAuthnFailureLog) {
-            Serial.printf("[webauthn] %s: the COSE public key is not a valid P-256 point "
+            Log.printf("[webauthn] %s: the COSE public key is not a valid P-256 point "
                           "(off-curve or the identity element)\n", __func__);
         }
         return false;
@@ -606,7 +609,7 @@ bool webauthn_register_finish(const char* body, size_t bodyLen) {
 
     if (!cred_store(&sc)) {
         if (kWebAuthnFailureLog) {
-            Serial.printf("[webauthn] %s: could not store the credential - the store is full "
+            Log.printf("[webauthn] %s: could not store the credential - the store is full "
                           "(kMaxCredentials=%u) or the NVS write failed\n",
                           __func__, (unsigned)kMaxCredentials);
         }
@@ -649,7 +652,7 @@ bool webauthn_auth_finish(const char* body, size_t bodyLen, uint32_t srcIp) {
     int idbL = json_get_str(b, bodyLen, "id", idb, kIdB64Cap);
     if (cdbL < 0 || adbL < 0 || sgbL < 0 || idbL < 0) {
         if (kWebAuthnFailureLog) {
-            Serial.printf("[webauthn] %s: JSON field missing or oversized "
+            Log.printf("[webauthn] %s: JSON field missing or oversized "
                           "(clientDataJSON=%d authenticatorData=%d signature=%d id=%d; "
                           "-1 = absent or longer than its cap)\n",
                           __func__, cdbL, adbL, sgbL, idbL);
@@ -664,7 +667,7 @@ bool webauthn_auth_finish(const char* body, size_t bodyLen, uint32_t srcIp) {
     // See register_finish: the stored length field is a uint8_t.
     if (cdLen < 0 || adLen < 0 || sgLen < 0 || idLen <= 0 || idLen > MAX_STORED_CRED_ID_LEN) {
         if (kWebAuthnFailureLog) {
-            Serial.printf("[webauthn] %s: base64url decode failed "
+            Log.printf("[webauthn] %s: base64url decode failed "
                           "(clientData=%d authData=%d sig=%d id=%d; id must be 1..%d)\n",
                           __func__, cdLen, adLen, sgLen, idLen, (int)MAX_STORED_CRED_ID_LEN);
         }
@@ -682,18 +685,18 @@ bool webauthn_auth_finish(const char* body, size_t bodyLen, uint32_t srcIp) {
         memcmp(typeStr, kTypeGet, sizeof(kTypeGet) - 1) != 0) {
         if (kWebAuthnFailureLog) {
             // Sanitized for the same reason as the register path (see there).
-            Serial.printf("[webauthn] %s: clientDataJSON.type is not \"webauthn.get\" ('",
+            Log.printf("[webauthn] %s: clientDataJSON.type is not \"webauthn.get\" ('",
                           __func__);
             safe_print((tl > 0) ? typeStr : "", 32);
-            Serial.printf("')\n");
+            Log.printf("')\n");
         }
         return false;
     }
     if (ol != (int)strlen(kOrigin) || memcmp(originStr, kOrigin, ol) != 0) {
         if (kWebAuthnFailureLog) {
-            Serial.printf("[webauthn] %s: clientDataJSON.origin '", __func__);
+            Log.printf("[webauthn] %s: clientDataJSON.origin '", __func__);
             safe_print((ol > 0) ? originStr : "", 64);
-            Serial.printf("' != kOrigin '%s'\n", kOrigin);
+            Log.printf("' != kOrigin '%s'\n", kOrigin);
         }
         return false;
     }
@@ -709,7 +712,7 @@ bool webauthn_auth_finish(const char* body, size_t bodyLen, uint32_t srcIp) {
     // the challenge) trips.
     if (!session_consume(challenge)) {
         if (kWebAuthnFailureLog) {
-            Serial.printf("[webauthn] %s: no live session for this challenge "
+            Log.printf("[webauthn] %s: no live session for this challenge "
                           "(never issued, already consumed, or older than %u ms)\n",
                           __func__, (unsigned)kSessionTtlMs);
         }
@@ -721,7 +724,7 @@ bool webauthn_auth_finish(const char* body, size_t bodyLen, uint32_t srcIp) {
     uint32_t signCount;
     if (!parse_authdata_assert(authData, adLen, &rpIdHash, &flags, &signCount)) {
         if (kWebAuthnFailureLog) {
-            Serial.printf("[webauthn] %s: authenticatorData is too short or malformed (%d bytes; "
+            Log.printf("[webauthn] %s: authenticatorData is too short or malformed (%d bytes; "
                           "needs at least 37)\n", __func__, adLen);
         }
         return false;
@@ -731,7 +734,7 @@ bool webauthn_auth_finish(const char* body, size_t bodyLen, uint32_t srcIp) {
     crypto_sha256((const uint8_t*)kRpId, strlen(kRpId), expectRp);
     if (!crypto_const_eq(rpIdHash, expectRp, 32)) {
         if (kWebAuthnFailureLog) {
-            Serial.printf("[webauthn] %s: rpIdHash mismatch - the authenticator signed for "
+            Log.printf("[webauthn] %s: rpIdHash mismatch - the authenticator signed for "
                           "RP ID %02x%02x%02x%02x..., SHA-256(kRpId='%s') is %02x%02x%02x%02x...\n",
                           __func__, rpIdHash[0], rpIdHash[1], rpIdHash[2], rpIdHash[3],
                           kRpId, expectRp[0], expectRp[1], expectRp[2], expectRp[3]);
@@ -748,7 +751,7 @@ bool webauthn_auth_finish(const char* body, size_t bodyLen, uint32_t srcIp) {
     uint16_t credSlot = 0;
     if (!cred_lookup_ex(credId, idLen, &cred, &rt, &credSlot)) {
         if (kWebAuthnFailureLog) {
-            Serial.printf("[webauthn] %s: no stored credential matches this id (%d bytes) - "
+            Log.printf("[webauthn] %s: no stored credential matches this id (%d bytes) - "
                           "is it revoked, or stored under a different id?\n", __func__, idLen);
         }
         return false;
@@ -757,7 +760,7 @@ bool webauthn_auth_finish(const char* body, size_t bodyLen, uint32_t srcIp) {
     // A disabled key fails before the signature check (no counter update / authorized IP).
     if (rt.disabled) {
         if (kWebAuthnFailureLog) {
-            Serial.printf("[webauthn] %s: this credential is DISABLED - an administrator "
+            Log.printf("[webauthn] %s: this credential is DISABLED - an administrator "
                           "disabled it (re-enable it on the admin console, or revoke it)\n",
                           __func__);
         }
@@ -770,7 +773,7 @@ bool webauthn_auth_finish(const char* body, size_t bodyLen, uint32_t srcIp) {
 
     if (!crypto_verify_es256(cred.pubX, cred.pubY, signedData, adLen + 32, sig, sgLen)) {
         if (kWebAuthnFailureLog) {
-            Serial.printf("[webauthn] %s: ES256 signature verification failed "
+            Log.printf("[webauthn] %s: ES256 signature verification failed "
                           "(sig %d bytes, authData %d bytes)\n", __func__, sgLen, adLen);
         }
         return false;
@@ -779,7 +782,7 @@ bool webauthn_auth_finish(const char* body, size_t bodyLen, uint32_t srcIp) {
     // Clone detection: signCount must strictly increase (when both non-zero).
     if (cred.signCount != 0 && signCount != 0 && signCount <= cred.signCount) {
         if (kWebAuthnFailureLog) {
-            Serial.printf("[webauthn] %s: sign counter did not increase (%u <= stored %u)\n",
+            Log.printf("[webauthn] %s: sign counter did not increase (%u <= stored %u)\n",
                           __func__, (unsigned)signCount, (unsigned)cred.signCount);
         }
         return false;

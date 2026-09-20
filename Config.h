@@ -52,10 +52,24 @@ static const uint32_t kClockMinValidEpoch = 1789000000u;
 
 ////////// Admin internal IP allowlist //////////
 
-// IPs allowed to enroll and revoke (the /register/* and /admin routes).
+// IPs allowed to enroll and revoke (the /register/* and /admin routes). These are the
+// SEED for the runtime-editable allowlist (see Acl.h): on first boot they are copied to
+// NVS, after which the NVS copy is authoritative.
 static const IPAddress kAdminIPs[] = {
     IPAddress(192, 168, 1, 5),
 };
+
+// Maximum addresses per editable allowlist (8 admin + 8 consumer).
+static const uint16_t kAllowlistMaxEntries = 8;
+
+// Allow the admin console to add/remove allowlist entries at runtime. Set to false to
+// freeze both lists at their persisted (or seed) values - a compile-time-only lock.
+static const bool kRuntimeAllowlistEdits = true;
+
+// When adding to the ADMIN allowlist at runtime, accept only non-public IPv4
+// (RFC 1918 10/8, 172.16/12, 192.168/16, plus 127/8 loopback and 169.254/16 link-local).
+// Set to false to allow any address.
+static const bool kAdminIPsNonPublicOnly = true;
 
 ////////// Security gate: rate limiting (per-IP throttle, circular RAM ring) //////////
 
@@ -81,8 +95,9 @@ static const uint16_t kFailuresBeforeBlock = 3;
 // Block any non-admin IP that touches an admin route (GET /admin, /register/*, /admin/*)
 static const bool kBlockNonAdminIPOnAdminRoute = true;
 
-// Block any non-admin, non-consumer IP that requests a route that does not exist
-// Legitimate users are unlikely to trip this since their entry point is simply GET /
+// Block any non-admin, non-consumer IP that requests a route that does not exist -
+// a scanner probe (/wp-login.php, /admin.cgi, ...). Mirrors the allowlist guard in
+// handler_not_found().
 static const bool kBlockScanners = true;
 
 ////////// Security gate: Ethernet-driver (L2) drop //////////
@@ -100,10 +115,11 @@ static const uint32_t kAuthorizedIPTtlMs = 36000000;
 
 ////////// Consumer endpoint (/authorized-ips) //////////
 
-// Shared secret for ?key=... on the consumer endpoint. Change before deploying.
+// Shared secret for ?key=... on the consumer endpoint. Change before deploying (120 character maximum).
 static const char* kConsumerSecret = "CHANGE_ME";
 
-// Source IPs permitted to read the authorized-IP list.
+// Source IPs permitted to read the authorized-IP list. Seed for the runtime-editable
+// consumer allowlist (see Acl.h), mirroring the admin seed above.
 static const IPAddress kConsumerAllowlist[] = {
     IPAddress(192, 168, 1, 5),
 };

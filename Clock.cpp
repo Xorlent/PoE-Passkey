@@ -4,6 +4,7 @@
 
 #include "Config.h"
 #include "Clock.h"
+#include "Log.h"
 
 #include <Arduino.h>
 #include <time.h>
@@ -20,9 +21,9 @@ static void on_sntp_sync(struct timeval* tv) {
     struct tm tmv;
     char text[32];
     if (gmtime_r(&when, &tmv) && strftime(text, sizeof(text), "%Y-%m-%d %H:%M:%SZ", &tmv)) {
-        Serial.printf("[clock] NTP synced: %s\n", text);
+        Log.printf("[clock] NTP synced: %s\n", text);
     } else {
-        Serial.printf("[clock] NTP synced: %lu\n", (unsigned long)tv->tv_sec);
+        Log.printf("[clock] NTP synced: %lu\n", (unsigned long)tv->tv_sec);
     }
 }
 
@@ -46,7 +47,7 @@ static char s_ntpServer[64];
 
 bool clock_begin() {
     if (!ntp_server_ok(ntpSvr)) {
-        Serial.println("[clock] FATAL: Config.h ntpSvr is not set (0.0.0.0 or empty) - there will "
+        Log.println("[clock] FATAL: Config.h ntpSvr is not set (0.0.0.0 or empty) - there will "
                        "be no sync, so last-used dates stay unknown");
         return false;
     }
@@ -66,12 +67,12 @@ bool clock_begin() {
 
     const esp_err_t err = esp_netif_sntp_init(&cfg);
     if (err != ESP_OK) {
-        Serial.printf("[clock] FATAL: could not start the NTP client (%s); last-used dates "
+        Log.printf("[clock] FATAL: could not start the NTP client (%s); last-used dates "
                       "will stay unknown until this is fixed\n", esp_err_to_name(err));
         return false;
     }
 
-    Serial.printf("[clock] NTP: syncing from %s, re-syncing every %u s\n",
+    Log.printf("[clock] NTP: syncing from %s, re-syncing every %u s\n",
                   s_ntpServer, (unsigned)(esp_sntp_get_sync_interval() / 1000));
     return true;
 }

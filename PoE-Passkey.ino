@@ -11,6 +11,8 @@
 
 ////////--------------------------------------- DO NOT EDIT ANYTHING BELOW THIS LINE ---------------------------------------////////
 
+#include "Log.h"
+#include "Acl.h"
 #include <ETH.h>
 #include <esp_heap_caps.h>
 #include <esp_log.h>
@@ -47,16 +49,6 @@ static uint16_t s_maxOpenSockets = 0;
 // unwrapped correctly instead of showing up as 0.0.0.0.
 static uint32_t req_client_ip(httpd_req_t* req) {
     return frontdoor_peer_ipv4(httpd_req_to_sockfd(req));
-}
-
-// Is `ip` (network byte order) present in an IPv4 list?
-static bool ip_in_list(uint32_t ip, const IPAddress* list, uint32_t count) {
-    for (uint32_t i = 0; i < count; ++i) {
-        if ((uint32_t)list[i] == ip) {
-            return true;
-        }
-    }
-    return false;
 }
 
 // Read the whole body into `buf` (NUL-terminated). Returns length, or -1 on error.
@@ -102,6 +94,34 @@ static esp_err_t send_json(httpd_req_t* req, const char* body) {
     return ESP_OK;
 }
 
+// JSON-encode `src` into `dst` (cap bytes, incl. NUL). Escapes `"`, `\` and control
+// bytes (as \u00XX); returns the encoded length (excl. NUL), or 0 on overflow. Log
+// lines carry caller-influenced text, so unlike the credential listing this must
+// escape rather than assume the field is already JSON-safe.
+static size_t json_escape(const char* src, char* dst, size_t cap) {
+    static const char kHex[] = "0123456789abcdef";
+    size_t o = 0;
+    for (const char* p = src; *p; ++p) {
+        const unsigned char c = (unsigned char)*p;
+        if (c == '"' || c == '\\') {
+            if (o + 2 >= cap) return 0;
+            dst[o++] = '\\';
+            dst[o++] = (char)c;
+        } else if (c < 0x20) {
+            if (o + 6 >= cap) return 0;
+            dst[o++] = '\\'; dst[o++] = 'u'; dst[o++] = '0'; dst[o++] = '0';
+            dst[o++] = kHex[(c >> 4) & 0xF];
+            dst[o++] = kHex[c & 0xF];
+        } else {
+            if (o + 1 >= cap) return 0;
+            dst[o++] = (char)c;
+        }
+    }
+    if (o >= cap) return 0;
+    dst[o] = 0;
+    return o;
+}
+
 // HTTP method name for the access log.
 static const char* method_name(httpd_method_t method) {
     switch (method) {
@@ -129,7 +149,7 @@ static void print_uri_masked(const char* uri) {
     // The path is caller-supplied too (a request line can carry raw bytes), so it goes
     // through the same printer as everything else.
     safe_print_range(uri, (size_t)(q - uri), 128);
-    Serial.print('?');
+    Log.print('?');
 
     const char* p = q + 1;
     bool first = true;
@@ -137,7 +157,7 @@ static void print_uri_masked(const char* uri) {
         const char* amp = strchr(p, '&');
         const char* end = amp ? amp : p + strlen(p);
         if (!first) {
-            Serial.print('&');
+            Log.print('&');
         }
         first = false;
 
@@ -146,10 +166,10 @@ static void print_uri_masked(const char* uri) {
             safe_print_range(p, (size_t)(end - p), 64);          // a valueless flag
         } else if (param_name_is_key(p, (size_t)(eq - p))) {
             safe_print_range(p, (size_t)(eq - p), 64);
-            Serial.print("=***");                                // the secret's value
+            Log.print("=***");                                // the secret's value
         } else {
             safe_print_range(p, (size_t)(eq - p), 64);
-            Serial.print('=');
+            Log.print('=');
             safe_print_range(eq + 1, (size_t)(end - eq - 1), 64);
         }
         p = amp ? amp + 1 : end;
@@ -176,9 +196,9 @@ static void log_request(httpd_req_t* req) {
     // req->method is an int in this IDF's httpd_req, so the cast is required (it was
     // never checked before: the previous ESP_LOGI call was compiled out, which is how
     // this hid).
-    Serial.printf("[req] %s ", method_name((httpd_method_t)req->method));
+    Log.printf("[req] %s ", method_name((httpd_method_t)req->method));
     print_uri_masked(req->uri);
-    Serial.printf(" from %s\n", ip.toString().c_str());
+    Log.printf(" from %s\n", ip.toString().c_str());
 }
 
 // Page render buffer, allocated once at boot (PSRAM, internal RAM fallback). Size is the
@@ -196,7 +216,7 @@ static bool page_buffer_begin() {
     if (!s_pageBuf) {
         // Report the fallback: internal RAM is exactly what the TLS record buffers come
         // out of, so losing ~6 KB of it to the page buffer is worth knowing about.
-        Serial.printf("[page] PSRAM unavailable for the %u B render buffer; using internal RAM\n",
+        Log.printf("[page] PSRAM unavailable for the %u B render buffer; using internal RAM\n",
                       (unsigned)s_pageBufCap);
         s_pageBuf = (char*)malloc(s_pageBufCap);
     }
@@ -302,7 +322,7 @@ static esp_err_t send_page(httpd_req_t* req, const char* tpl, const char* ipStr)
     const int cspLen = snprintf(csp, sizeof(csp), POE_CSP_FORMAT, nonce, nonce);
     if (cspLen <= 0 || (size_t)cspLen >= sizeof(csp)) {
         // Only if POE_CSP_FORMAT outgrew its buffer; say so (a truncated policy is weaker).
-        Serial.printf("[page] CSP does not fit its %u B buffer: check POE_CSP_FORMAT\n",
+        Log.printf("[page] CSP does not fit its %u B buffer: check POE_CSP_FORMAT\n",
                       (unsigned)sizeof(csp));
     }
 
@@ -330,18 +350,18 @@ static esp_err_t admin_denied(httpd_req_t* req, const char* what) {
     const uint32_t peer = req_client_ip(req);
     IPAddress ip(peer);
     const String ipStr = ip.toString();
-    Serial.printf("[admin] %s refused: %s is not in kAdminIPs (Config.h)\n", what, ipStr.c_str());
+    Log.printf("[admin] %s refused: %s is not in kAdminIPs (Config.h)\n", what, ipStr.c_str());
 
     if (kBlockNonAdminIPOnAdminRoute) {
         if (peer == 0) {
-            Serial.println("[admin] not blocking the peer: it has no usable IPv4 address");
-        } else if (ip_in_list(peer, kAdminIPs, kAdminIPCount) ||
-                   ip_in_list(peer, kConsumerAllowlist, kConsumerAllowlistCount)) {
+            Log.println("[admin] not blocking the peer: it has no usable IPv4 address");
+        } else if (acl_is_admin(peer) ||
+                   acl_is_consumer(peer)) {
             // Guard: never block a host in either allowlist.
-            Serial.printf("[admin] not blocking %s: it is in a configured allowlist\n", ipStr.c_str());
+            Log.printf("[admin] not blocking %s: it is in a configured allowlist\n", ipStr.c_str());
         } else {
             frontdoor_block_ip_reason(peer, "admin route request from a non-admin source IP");
-            Serial.printf("[admin] recover that host with the serial console: 'unblock %s' or 'clear-blocks'\n",
+            Log.printf("[admin] recover that host with the serial console: 'unblock %s' or 'clear-blocks'\n",
                           ipStr.c_str());
         }
     }
@@ -357,8 +377,8 @@ static esp_err_t handler_not_found(httpd_req_t* req, httpd_err_code_t error) {
     (void)error;
     const uint32_t peer = req_client_ip(req);
     if (kBlockScanners && peer != 0 &&
-        !ip_in_list(peer, kAdminIPs, kAdminIPCount) &&
-        !ip_in_list(peer, kConsumerAllowlist, kConsumerAllowlistCount)) {
+        !acl_is_admin(peer) &&
+        !acl_is_consumer(peer)) {
         frontdoor_block_ip_reason(peer, "scanner probe: non-existent route");
     }
     return send_json_status(req, "404 Not Found", "{\"error\":\"not_found\"}");
@@ -408,7 +428,7 @@ static esp_err_t handler_admin_page(httpd_req_t* req) {
     log_request(req);
 
     const uint32_t peer = req_client_ip(req);
-    if (!ip_in_list(peer, kAdminIPs, kAdminIPCount)) {
+    if (!acl_is_admin(peer)) {
         return admin_denied(req, "GET /admin");
     }
 
@@ -492,7 +512,7 @@ static esp_err_t handler_register_start(httpd_req_t* req) {
     }
     log_request(req);
 
-    if (!ip_in_list(req_client_ip(req), kAdminIPs, kAdminIPCount)) {
+    if (!acl_is_admin(req_client_ip(req))) {
         return admin_denied(req, "POST /register/start");
     }
 
@@ -517,7 +537,7 @@ static esp_err_t handler_register_start(httpd_req_t* req) {
         // extract_field stops at the cap, and a truncated address would silently become
         // a different identity than the one the operator typed - refuse it instead.
         free(body);
-        Serial.printf("[admin] POST /register/start refused: the email is longer than %u bytes\n",
+        Log.printf("[admin] POST /register/start refused: the email is longer than %u bytes\n",
                       (unsigned)sizeof(email) - 1);
         return send_json_status(req, "400 Bad Request", "{\"error\":\"invalid_email\"}");
     }
@@ -528,19 +548,19 @@ static esp_err_t handler_register_start(httpd_req_t* req) {
         free(body);
         // The address is caller-supplied AND reached this line by failing validation, so it
         // may contain anything: print it sanitized
-        Serial.printf("[admin] POST /register/start refused: '");
+        Log.printf("[admin] POST /register/start refused: '");
         safe_print(email, 64);
-        Serial.printf("' is not a usable email address\n");
+        Log.printf("' is not a usable email address\n");
         return send_json_status(req, "400 Bad Request", "{\"error\":\"invalid_email\"}");
     }
     if (n == -3) {
         free(body);
-        Serial.println("[admin] POST /register/start: the session store is full (kMaxSessions)");
+        Log.println("[admin] POST /register/start: the session store is full (kMaxSessions)");
         return send_json_status(req, "429 Too Many Requests", "{\"error\":\"busy\"}");
     }
     if (n < 0) {
         free(body);
-        Serial.printf("[admin] POST /register/start: could not build the options (error %d)\n", n);
+        Log.printf("[admin] POST /register/start: could not build the options (error %d)\n", n);
         return send_json_status(req, "500 Internal Server Error", "{\"error\":\"encode_error\"}");
     }
 
@@ -556,7 +576,7 @@ static esp_err_t handler_register_finish(httpd_req_t* req) {
     }
     log_request(req);
 
-    if (!ip_in_list(req_client_ip(req), kAdminIPs, kAdminIPCount)) {
+    if (!acl_is_admin(req_client_ip(req))) {
         return admin_denied(req, "POST /register/finish");
     }
 
@@ -650,8 +670,8 @@ static esp_err_t handler_authorized_ips(httpd_req_t* req) {
     log_request(req);
 
     IPAddress ip(req_client_ip(req));
-    if (!ip_in_list((uint32_t)ip, kConsumerAllowlist, kConsumerAllowlistCount)) {
-        Serial.printf("[consumer] GET /authorized-ips refused: %s is not in kConsumerAllowlist (Config.h)\n",
+    if (!acl_is_consumer((uint32_t)ip)) {
+        Log.printf("[consumer] GET /authorized-ips refused: %s is not in kConsumerAllowlist (Config.h)\n",
                       ip.toString().c_str());
         return send_json_status(req, "403 Forbidden", "{\"error\":\"not_consumer_ip\"}");
     }
@@ -660,7 +680,7 @@ static esp_err_t handler_authorized_ips(httpd_req_t* req) {
     if (httpd_req_get_url_query_str(req, query, sizeof(query)) != ESP_OK) {
         // Name the shape the caller has to send: this is a misconfigured consumer, and
         // "key_required" alone does not say whether the key was missing or malformed.
-        Serial.printf("[consumer] GET /authorized-ips refused: no query string (expected ?key=<secret>) from %s\n",
+        Log.printf("[consumer] GET /authorized-ips refused: no query string (expected ?key=<secret>) from %s\n",
                       ip.toString().c_str());
         return send_json_status(req, "403 Forbidden", "{\"error\":\"key_required\"}");
     }
@@ -668,17 +688,17 @@ static esp_err_t handler_authorized_ips(httpd_req_t* req) {
     if (httpd_query_key_value(query, "key", key, sizeof(key)) != ESP_OK) {
         // The query string is caller-supplied: print it sanitized (see
         // print_untrusted_text) so it cannot inject terminal escapes into the console.
-        Serial.printf("[consumer] GET /authorized-ips refused: query '");
+        Log.printf("[consumer] GET /authorized-ips refused: query '");
         safe_print(query, 64);
-        Serial.printf("' has no key= parameter from %s\n", ip.toString().c_str());
+        Log.printf("' has no key= parameter from %s\n", ip.toString().c_str());
         return send_json_status(req, "403 Forbidden", "{\"error\":\"key_required\"}");
     }
     if (!crypto_const_eq_str(key, strlen(key), kConsumerSecret, strlen(kConsumerSecret))) {
         // Deliberately vague to the caller: an allowlisted peer with the wrong secret
         // is either misconfigured or guessing.
-        Serial.print("[consumer] GET /authorized-ips refused: bad ?key= value '");
+        Log.print("[consumer] GET /authorized-ips refused: bad ?key= value '");
         safe_print(key, 64);
-        Serial.printf("' (%u bytes, supplied) from %s\n",
+        Log.printf("' (%u bytes, supplied) from %s\n",
                       (unsigned)strlen(key), ip.toString().c_str());
         return send_json_status(req, "403 Forbidden", "{\"error\":\"bad_key\"}");
     }
@@ -713,7 +733,7 @@ static esp_err_t handler_authorized_ips(httpd_req_t* req) {
     // Say what was produced, not just that a request arrived: the body is a bare list, so
     // "served 0 IP(s)" is otherwise indistinguishable from a mangled response.
     if (kLogHttpRequests) {
-        Serial.printf("[consumer] GET /authorized-ips: served %u IP(s), %u bytes\n",
+        Log.printf("[consumer] GET /authorized-ips: served %u IP(s), %u bytes\n",
                       (unsigned)n, (unsigned)off);
     }
 
@@ -773,7 +793,7 @@ static esp_err_t handler_admin_credentials(httpd_req_t* req) {
     }
     log_request(req);
 
-    if (!ip_in_list(req_client_ip(req), kAdminIPs, kAdminIPCount)) {
+    if (!acl_is_admin(req_client_ip(req))) {
         return admin_denied(req, "GET /admin/credentials");
     }
 
@@ -790,10 +810,210 @@ static esp_err_t handler_admin_credentials(httpd_req_t* req) {
     httpd_resp_send_chunk(req, nullptr, 0);
 
     if (kLogHttpRequests) {
-        Serial.printf("[admin] GET /admin/credentials: %u credential(s)%s\n",
+        Log.printf("[admin] GET /admin/credentials: %u credential(s)%s\n",
                       (unsigned)n, st.failed ? " (incomplete: send failed)" : "");
     }
     return st.failed ? ESP_FAIL : ESP_OK;
+}
+
+// GET /admin/logs - the last LOG_RING_SIZE diagnostic lines, oldest first (the client
+// reverses for newest-first). Streamed like the other admin listings, from a snapshot so
+// a concurrent writer cannot skew the view mid-stream.
+static esp_err_t handler_admin_logs(httpd_req_t* req) {
+    if (!frontdoor_admit_request(req)) {
+        return ESP_FAIL; // rejection response already sent; drop the connection
+    }
+    log_request(req);
+
+    if (!acl_is_admin(req_client_ip(req))) {
+        return admin_denied(req, "GET /admin/logs");
+    }
+
+    LogEntry* entries = (LogEntry*)heap_caps_malloc(LOG_RING_SIZE * sizeof(LogEntry), MALLOC_CAP_SPIRAM);
+    if (entries == nullptr) {
+        entries = (LogEntry*)malloc(LOG_RING_SIZE * sizeof(LogEntry));
+    }
+    // Worst case every byte of a line escapes to "\u00XX" (6 bytes): 6x headroom.
+    char* line = (char*)malloc(LOG_LINE_CAP * 6 + 1);
+    if (entries == nullptr || line == nullptr) {
+        free(entries);
+        free(line);
+        return send_json_status(req, "500 Internal Server Error", "{\"error\":\"oom\"}");
+    }
+    const size_t n = log_snapshot(entries, LOG_RING_SIZE);
+
+    httpd_resp_set_type(req, "application/json");
+    bool failed = httpd_resp_send_chunk(req, "[", 1) != ESP_OK;
+    for (size_t i = 0; i < n && !failed; ++i) {
+        const size_t elen = json_escape(entries[i].line, line, LOG_LINE_CAP * 6 + 1);
+        char head[40];
+        const int hl = snprintf(head, sizeof(head), "%s{\"t\":%lu,\"line\":\"",
+                                i ? "," : "", (unsigned long)entries[i].unix);
+        if (hl <= 0 || (size_t)hl >= sizeof(head) ||
+            httpd_resp_send_chunk(req, head, (ssize_t)hl) != ESP_OK ||
+            httpd_resp_send_chunk(req, line, (ssize_t)elen) != ESP_OK ||
+            httpd_resp_send_chunk(req, "\"}", 2) != ESP_OK) {
+            failed = true;
+            break;
+        }
+    }
+    if (!failed && httpd_resp_send_chunk(req, "]", 1) != ESP_OK) failed = true;
+
+    // Terminate the chunked body even after a send error (see handler_admin_credentials).
+    httpd_resp_send_chunk(req, nullptr, 0);
+
+    free(line);
+    free(entries);
+    return failed ? ESP_FAIL : ESP_OK;
+}
+
+// GET /admin/acl - the admin + consumer allowlists and the runtime-edit flag.
+static esp_err_t handler_admin_acl(httpd_req_t* req) {
+    if (!frontdoor_admit_request(req)) {
+        return ESP_FAIL;
+    }
+    log_request(req);
+
+    if (!acl_is_admin(req_client_ip(req))) {
+        return admin_denied(req, "GET /admin/acl");
+    }
+
+    uint32_t admin[kAllowlistMaxEntries], consumer[kAllowlistMaxEntries];
+    const size_t an = acl_snapshot(ACL_ADMIN, admin, kAllowlistMaxEntries);
+    const size_t cn = acl_snapshot(ACL_CONSUMER, consumer, kAllowlistMaxEntries);
+
+    // 8 IPs * ~18 chars per list + overhead; 512 is ample for the capped lists.
+    char body[512];
+    size_t o = (size_t)snprintf(body, sizeof(body), "{\"edits\":%s,\"admin\":[",
+                                kRuntimeAllowlistEdits ? "true" : "false");
+    for (size_t i = 0; i < an; ++i) {
+        IPAddress a(admin[i]);
+        o += (size_t)snprintf(body + o, sizeof(body) - o, "%s\"%s\"", i ? "," : "", a.toString().c_str());
+    }
+    o += (size_t)snprintf(body + o, sizeof(body) - o, "],\"consumer\":[");
+    for (size_t i = 0; i < cn; ++i) {
+        IPAddress a(consumer[i]);
+        o += (size_t)snprintf(body + o, sizeof(body) - o, "%s\"%s\"", i ? "," : "", a.toString().c_str());
+    }
+    snprintf(body + o, sizeof(body) - o, "]}");
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, body);
+    return ESP_OK;
+}
+
+// Parse an editing body { "list":"admin"|"consumer", "ip":"a.b.c.d" }. Returns nullptr
+// on success (filling *list / *ipOut); otherwise an error code for a 400 response.
+static const char* acl_parse_req(const char* body, size_t len, acl_list_t* list, uint32_t* ipOut) {
+    char listBuf[16], ipBuf[64];
+    if (extract_field(body, len, "list", listBuf, sizeof(listBuf)) <= 0 ||
+        extract_field(body, len, "ip", ipBuf, sizeof(ipBuf)) <= 0) {
+        return "list_and_ip_required";
+    }
+    if (strcmp(listBuf, "admin") == 0) {
+        *list = ACL_ADMIN;
+    } else if (strcmp(listBuf, "consumer") == 0) {
+        *list = ACL_CONSUMER;
+    } else {
+        return "invalid_list";
+    }
+    IPAddress a;
+    if (!a.fromString(ipBuf)) {
+        return "invalid_ip";
+    }
+    *ipOut = (uint32_t)a;
+    return nullptr;
+}
+
+// POST /admin/acl-add - { "list":"admin"|"consumer", "ip":"a.b.c.d" }
+static esp_err_t handler_admin_acl_add(httpd_req_t* req) {
+    if (!frontdoor_admit_request(req)) {
+        return ESP_FAIL;
+    }
+    log_request(req);
+    if (!acl_is_admin(req_client_ip(req))) {
+        return admin_denied(req, "POST /admin/acl-add");
+    }
+    if (!kRuntimeAllowlistEdits) {
+        return send_json_status(req, "403 Forbidden", "{\"error\":\"edits_disabled\"}");
+    }
+
+    char* body = (char*)malloc(kMaxBodySize + 1);
+    if (!body) return send_json_status(req, "500 Internal Server Error", "{\"error\":\"oom\"}");
+    int bl = read_body(req, body, kMaxBodySize + 1);
+    if (bl < 0) {
+        free(body);
+        return send_json_status(req, "413 Payload Too Large", "{\"error\":\"payload\"}");
+    }
+
+    acl_list_t list;
+    uint32_t ip;
+    const char* err = acl_parse_req(body, (size_t)bl, &list, &ip);
+    if (err) {
+        free(body);
+        char msg[64];
+        snprintf(msg, sizeof(msg), "{\"error\":\"%s\"}", err);
+        return send_json_status(req, "400 Bad Request", msg);
+    }
+
+    if (list == ACL_ADMIN && kAdminIPsNonPublicOnly && !acl_is_non_public(ip)) {
+        free(body);
+        return send_json_status(req, "400 Bad Request", "{\"error\":\"routable_not_allowed\"}");
+    }
+    const bool full = acl_count(list) >= kAllowlistMaxEntries;
+    const bool dup  = (list == ACL_ADMIN) ? acl_is_admin(ip) : acl_is_consumer(ip);
+    free(body);
+    if (full) return send_json_status(req, "400 Bad Request", "{\"error\":\"allowlist_full\"}");
+    if (dup)  return send_json_status(req, "400 Bad Request", "{\"error\":\"duplicate\"}");
+    if (!acl_add(list, ip)) {
+        return send_json_status(req, "400 Bad Request", "{\"error\":\"add_failed\"}");
+    }
+    return send_json(req, "{\"ok\":true}");
+}
+
+// POST /admin/acl-remove - { "list":"admin"|"consumer", "ip":"a.b.c.d" }. Refuses to
+// remove the caller's own source IP from the admin list (self-lockout guard).
+static esp_err_t handler_admin_acl_remove(httpd_req_t* req) {
+    if (!frontdoor_admit_request(req)) {
+        return ESP_FAIL;
+    }
+    log_request(req);
+    if (!acl_is_admin(req_client_ip(req))) {
+        return admin_denied(req, "POST /admin/acl-remove");
+    }
+    if (!kRuntimeAllowlistEdits) {
+        return send_json_status(req, "403 Forbidden", "{\"error\":\"edits_disabled\"}");
+    }
+
+    char* body = (char*)malloc(kMaxBodySize + 1);
+    if (!body) return send_json_status(req, "500 Internal Server Error", "{\"error\":\"oom\"}");
+    int bl = read_body(req, body, kMaxBodySize + 1);
+    if (bl < 0) {
+        free(body);
+        return send_json_status(req, "413 Payload Too Large", "{\"error\":\"payload\"}");
+    }
+
+    acl_list_t list;
+    uint32_t ip;
+    const char* err = acl_parse_req(body, (size_t)bl, &list, &ip);
+    if (err) {
+        free(body);
+        char msg[64];
+        snprintf(msg, sizeof(msg), "{\"error\":\"%s\"}", err);
+        return send_json_status(req, "400 Bad Request", msg);
+    }
+
+    if (list == ACL_ADMIN && ip == req_client_ip(req)) {
+        free(body);
+        return send_json_status(req, "400 Bad Request", "{\"error\":\"cannot_remove_self\"}");
+    }
+    const bool present = (list == ACL_ADMIN) ? acl_is_admin(ip) : acl_is_consumer(ip);
+    free(body);
+    if (!present) return send_json_status(req, "400 Bad Request", "{\"error\":\"not_found\"}");
+    if (!acl_remove(list, ip)) {
+        return send_json_status(req, "400 Bad Request", "{\"error\":\"remove_failed\"}");
+    }
+    return send_json(req, "{\"ok\":true}");
 }
 
 // POST /admin/revoke-credential - { "id": "<base64url credentialId>" }
@@ -803,7 +1023,7 @@ static esp_err_t handler_admin_revoke_credential(httpd_req_t* req) {
     }
     log_request(req);
 
-    if (!ip_in_list(req_client_ip(req), kAdminIPs, kAdminIPCount)) {
+    if (!acl_is_admin(req_client_ip(req))) {
         return admin_denied(req, "POST /admin/revoke-credential");
     }
 
@@ -836,7 +1056,7 @@ static esp_err_t handler_admin_set_credential_disabled(httpd_req_t* req) {
     log_request(req);
 
     const uint32_t peer = req_client_ip(req);
-    if (!ip_in_list(peer, kAdminIPs, kAdminIPCount)) {
+    if (!acl_is_admin(peer)) {
         return admin_denied(req, "POST /admin/set-credential-disabled");
     }
 
@@ -862,10 +1082,10 @@ static esp_err_t handler_admin_set_credential_disabled(httpd_req_t* req) {
     IPAddress from(peer);
     const String fromStr = from.toString();
     if (ok) {
-        Serial.printf("[admin] %s a credential from %s\n",
+        Log.printf("[admin] %s a credential from %s\n",
                       disabled ? "DISABLED" : "re-enabled", fromStr.c_str());
     } else {
-        Serial.printf("[admin] set-credential-disabled from %s: no credential matched that id\n",
+        Log.printf("[admin] set-credential-disabled from %s: no credential matched that id\n",
                       fromStr.c_str());
     }
     return send_json(req, ok ? "{\"ok\":true}" : "{\"ok\":false}");
@@ -878,7 +1098,7 @@ static esp_err_t handler_admin_authorized_ips(httpd_req_t* req) {
     }
     log_request(req);
 
-    if (!ip_in_list(req_client_ip(req), kAdminIPs, kAdminIPCount)) {
+    if (!acl_is_admin(req_client_ip(req))) {
         return admin_denied(req, "GET /admin/authorized-ips");
     }
 
@@ -938,7 +1158,7 @@ static esp_err_t handler_admin_authorized_ips(httpd_req_t* req) {
     free(ips);
 
     if (kLogHttpRequests) {
-        Serial.printf("[admin] GET /admin/authorized-ips: %u IP(s), %u attributed key(s)%s\n",
+        Log.printf("[admin] GET /admin/authorized-ips: %u IP(s), %u attributed key(s)%s\n",
                       (unsigned)n, (unsigned)userCount,
                       failed ? " (incomplete: send failed)" : "");
     }
@@ -952,7 +1172,7 @@ static esp_err_t handler_admin_revoke_ip(httpd_req_t* req) {
     }
     log_request(req);
 
-    if (!ip_in_list(req_client_ip(req), kAdminIPs, kAdminIPCount)) {
+    if (!acl_is_admin(req_client_ip(req))) {
         return admin_denied(req, "POST /admin/revoke-ip");
     }
 
@@ -1008,6 +1228,18 @@ static const httpd_uri_t uri_authorized_ips = {
 static const httpd_uri_t uri_admin_credentials = {
     .uri = "/admin/credentials", .method = HTTP_GET, .handler = handler_admin_credentials, .user_ctx = nullptr
 };
+static const httpd_uri_t uri_admin_logs = {
+    .uri = "/admin/logs", .method = HTTP_GET, .handler = handler_admin_logs, .user_ctx = nullptr
+};
+static const httpd_uri_t uri_admin_acl = {
+    .uri = "/admin/acl", .method = HTTP_GET, .handler = handler_admin_acl, .user_ctx = nullptr
+};
+static const httpd_uri_t uri_admin_acl_add = {
+    .uri = "/admin/acl-add", .method = HTTP_POST, .handler = handler_admin_acl_add, .user_ctx = nullptr
+};
+static const httpd_uri_t uri_admin_acl_remove = {
+    .uri = "/admin/acl-remove", .method = HTTP_POST, .handler = handler_admin_acl_remove, .user_ctx = nullptr
+};
 static const httpd_uri_t uri_admin_revoke_credential = {
     .uri = "/admin/revoke-credential", .method = HTTP_POST, .handler = handler_admin_revoke_credential, .user_ctx = nullptr
 };
@@ -1024,8 +1256,8 @@ static const httpd_uri_t uri_admin_set_credential_disabled = {
 static void register_one(httpd_handle_t server, const httpd_uri_t* uri) {
     const esp_err_t err = httpd_register_uri_handler(server, uri);
     if (err != ESP_OK) {
-        Serial.printf("[httpd] FATAL: could not register %s (%s). The route does not exist; "
-                      "raise cfg.httpd.max_uri_handlers (currently 16) and rebuild.\n",
+        Log.printf("[httpd] FATAL: could not register %s (%s). The route does not exist; "
+                      "raise cfg.httpd.max_uri_handlers and rebuild.\n",
                       uri->uri, esp_err_to_name(err));
     }
 }
@@ -1042,6 +1274,10 @@ static void register_handlers(httpd_handle_t server) {
     register_one(server, &uri_auth_cancel);
     register_one(server, &uri_authorized_ips);
     register_one(server, &uri_admin_credentials);
+    register_one(server, &uri_admin_logs);
+    register_one(server, &uri_admin_acl);
+    register_one(server, &uri_admin_acl_add);
+    register_one(server, &uri_admin_acl_remove);
     register_one(server, &uri_admin_revoke_credential);
     register_one(server, &uri_admin_authorized_ips);
     register_one(server, &uri_admin_revoke_ip);
@@ -1051,7 +1287,7 @@ static void register_handlers(httpd_handle_t server) {
     // callback blocks the peer when kBlockScanners and answers 404.
     const esp_err_t err404 = httpd_register_err_handler(server, HTTPD_404_NOT_FOUND, handler_not_found);
     if (err404 != ESP_OK) {
-        Serial.printf("[httpd] could not register the 404 handler (%s); scanner blocking is off\n",
+        Log.printf("[httpd] could not register the 404 handler (%s); scanner blocking is off\n",
                       esp_err_to_name(err404));
     }
 }
@@ -1063,12 +1299,12 @@ static void register_handlers(httpd_handle_t server) {
 static void print_tls_material(const char* certPem, size_t certLen, size_t keyLen) {
     char fp[64];
     if (certstore_cert_fingerprint(certPem, certLen, fp, sizeof(fp))) {
-        Serial.printf("  cert %u Bytes, SHA-1 %s\n", (unsigned)certLen, fp);
+        Log.printf("  cert %u Bytes, SHA-1 %s\n", (unsigned)certLen, fp);
     } else {
-        Serial.printf("  cert %u Bytes, UNPARSEABLE - httpd_ssl will refuse to start\n",
+        Log.printf("  cert %u Bytes, UNPARSEABLE - httpd_ssl will refuse to start\n",
                       (unsigned)certLen);
     }
-    Serial.printf("  key  %u Bytes\n", (unsigned)keyLen);
+    Log.printf("  key  %u Bytes\n", (unsigned)keyLen);
 }
 
 // The only TLS source is the NVS store (filled by the console's `import`). False when either
@@ -1083,7 +1319,7 @@ static bool resolve_tls(const uint8_t** cert, size_t* certLen,
     }
     *cert = (const uint8_t*)c; *certLen = cl;
     *key  = (const uint8_t*)k; *keyLen  = kl;
-    Serial.println("Using TLS material imported via serial console (NVS).");
+    Log.println("Using TLS material imported via serial console (NVS).");
     print_tls_material(c, cl, kl);
     ESP_LOGI(TAG, "Using TLS material imported via serial console (NVS).");
     return true;
@@ -1103,7 +1339,7 @@ void server_socket_report() {
     for (int i = 0; i < freeSlots; ++i) {
         close(held[i]);
     }
-    Serial.printf("Socket slots:   %d free (0 = accept fails with ENFILE)\n", freeSlots);
+    Log.printf("Socket slots:   %d free (0 = accept fails with ENFILE)\n", freeSlots);
 
     // What httpd itself holds. -1 = unknown (no handle, or the call failed).
     int sessions = -1;
@@ -1112,13 +1348,13 @@ void server_socket_report() {
         size_t nfds = sizeof(fds) / sizeof(fds[0]);
         if (httpd_get_client_list(s_httpsServer, &nfds, fds) == ESP_OK) {
             sessions = (int)nfds;
-            Serial.printf("HTTP sessions:  %d open (cap %u)\n", sessions,
+            Log.printf("HTTP sessions:  %d open (cap %u)\n", sessions,
                           (unsigned)s_maxOpenSockets);
         } else {
-            Serial.println("HTTP sessions:  unavailable (httpd_get_client_list failed)");
+            Log.println("HTTP sessions:  unavailable (httpd_get_client_list failed)");
         }
     } else {
-        Serial.println("HTTP sessions:  no server handle");
+        Log.println("HTTP sessions:  no server handle");
     }
 
     uint32_t charged = 0;
@@ -1126,17 +1362,17 @@ void server_socket_report() {
     const uint32_t opened = frontdoor_connections_opened();
     const uint32_t closed = frontdoor_connections_closed();
     const uint32_t inFlight = opened - closed;   // unsigned: opened >= closed always
-    Serial.printf("Connections:    %u SYNs charged at L2, %u accepted, %u closed (%u in flight)\n",
+    Log.printf("Connections:    %u SYNs charged at L2, %u accepted, %u closed (%u in flight)\n",
                   (unsigned)charged, (unsigned)opened, (unsigned)closed, (unsigned)inFlight);
     if (charged > opened) {
-        Serial.printf("                %u SYN(s) never became a session (accept/TLS failure)\n",
+        Log.printf("                %u SYN(s) never became a session (accept/TLS failure)\n",
                       (unsigned)(charged - opened));
     }
 
     // Warn when more connections are in flight than httpd holds and no socket slot is free
     // (a transient +1 is normal right after a connection is accepted).
     if (freeSlots == 0 && sessions >= 0 && inFlight > (uint32_t)sessions) {
-        Serial.printf("                <-- %u in flight but not held by httpd, with no slot free:"
+        Log.printf("                <-- %u in flight but not held by httpd, with no slot free:"
                       " socket leak (frontdoor_on_close must close its fd)\n",
                       (unsigned)(inFlight - (uint32_t)sessions));
     }
@@ -1145,9 +1381,9 @@ void server_socket_report() {
 // Halt but keep the serial console alive so the user can import TLS material
 // and reboot. Without this, a device with no cert could never be provisioned.
 static void halt_with_console(const char* msg) {
-    Serial.println();
-    Serial.printf("*** %s ***\n", msg);
-    Serial.println("Serial console is active: use 'import' to load the certificate + key.");
+    Log.println();
+    Log.printf("*** %s ***\n", msg);
+    Log.println("Serial console is active: use 'import' to load the certificate + key.");
     ESP_LOGE(TAG, "%s", msg);
     while (1) {
         serial_console_poll();
@@ -1163,11 +1399,15 @@ void setup() {
     while (!Serial) {
         delay(100);
     }
-    Serial.println("PoE-Passkey: starting...");
+
+    // Allocate the PSRAM log ring before the first diagnostic line, so it is captured.
+    log_begin();
+
+    Log.println("PoE-Passkey: starting...");
 
     // Report PSRAM before anything else can report a fallback.
     const size_t psramTotal = heap_caps_get_total_size(MALLOC_CAP_SPIRAM);
-    Serial.printf("PSRAM: %s - %u B total, %u B free (psramFound()=%s)\n",
+    Log.printf("PSRAM: %s - %u B total, %u B free (psramFound()=%s)\n",
                   psramTotal ? "usable" : "NOT USABLE",
                   (unsigned)psramTotal,
                   (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
@@ -1175,7 +1415,7 @@ void setup() {
 
     // Fail closed on any configuration error.
     if (!validateConfiguration()) {
-        Serial.println("HALTED: fix configuration errors in Config.h, recompile and reflash.");
+        Log.println("HALTED: fix configuration errors in Config.h, recompile and reflash.");
         while (1) {
             delay(1000);
         }
@@ -1191,10 +1431,10 @@ void setup() {
     ETH.config(ip, gateway, subnet, dns1, dns2);
     while (!ETH.linkUp()) {
         delay(1000);
-        Serial.println("Waiting for Ethernet...");
+        Log.println("Waiting for Ethernet...");
     }
-    Serial.print("Ethernet connected, IP: ");
-    Serial.println(ETH.localIP());
+    Log.print("Ethernet connected, IP: ");
+    Log.println(ETH.localIP());
 
     // Start NTP client
     clock_begin();
@@ -1204,6 +1444,9 @@ void setup() {
 
     // Persistent + ephemeral stores (credentials in NVS, sessions + IPs in RAM).
     store_begin();
+
+    // Runtime-editable IP allowlists (NVS-backed, seeded from Config.h on first boot).
+    acl_begin();
 
     // TLS material (cert + key) from the NVS store, filled by `import` on the console.
     certstore_begin();
@@ -1223,10 +1466,10 @@ void setup() {
     }
 
     // TLS server with the gate wired into open_fn.
-    Serial.println("Starting HTTPS server on port 443...");
+    Log.println("Starting HTTPS server on port 443...");
     ESP_LOGI(TAG, "Starting HTTPS server on port 443...");
     httpd_ssl_config_t cfg = HTTPD_SSL_CONFIG_DEFAULT();
-    cfg.httpd.max_uri_handlers = 16;
+    cfg.httpd.max_uri_handlers = 20;
     cfg.httpd.max_open_sockets = 6;
     s_maxOpenSockets = cfg.httpd.max_open_sockets;
     cfg.httpd.lru_purge_enable = true;
@@ -1251,7 +1494,7 @@ void setup() {
     // Allocate the GET / render buffer (PSRAM) before the baseline report, so the
     // report below already accounts for it.
     if (!page_buffer_begin()) {
-        Serial.println("No memory for the page buffer; GET / will serve the raw template.");
+        Log.println("No memory for the page buffer; GET / will serve the raw template.");
     }
 
     // Baseline before the TLS context (certificate parsing + listeners) exists.
@@ -1267,15 +1510,15 @@ void setup() {
     // the gate stores and the listener are already up before a frame can be dropped.
     if (kEthL2GateEnable) {
         if (eth_gate_begin(ETH.handle(), ETH.netif(), (uint16_t)cfg.port_secure)) {
-            Serial.println("L2 gate: active - blocked / over-budget SYNs are dropped in the Ethernet RX path.");
+            Log.println("L2 gate: active - blocked / over-budget SYNs are dropped in the Ethernet RX path.");
         } else {
-            Serial.println("L2 gate: NOT active - the request-level gate is still enforced.");
+            Log.println("L2 gate: NOT active - the request-level gate is still enforced.");
         }
     }
 
     memory_report("after TLS server start");
 
-    Serial.printf("PoE-Passkey ready: https://%s\n", kRpId);
+    Log.printf("PoE-Passkey ready: https://%s\n", kRpId);
     ESP_LOGI(TAG, "PoE-Passkey ready: https://%s", kRpId);
 }
 

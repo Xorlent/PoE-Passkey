@@ -4,13 +4,14 @@
 
 #include "Config.h"
 #include "ConfigValidation.h"
+#include "Log.h"
 #include <Arduino.h>
 #include <string.h>
 
 static bool s_halted = false;
 
 static void fail(const char* msg) {
-    Serial.printf("[CONFIG ERROR] %s\n", msg);
+    Log.printf("[CONFIG ERROR] %s\n", msg);
     s_halted = true;
 }
 
@@ -91,7 +92,7 @@ bool validateConfiguration() {
         return false;
     }
 
-    Serial.printf("Configuration validated: RP ID '%s', %u admin IP(s), %u consumer IP(s).\n",
+    Log.printf("Configuration validated: RP ID '%s', %u admin IP(s), %u consumer IP(s).\n",
                   kRpId, (unsigned)kAdminIPCount, (unsigned)kConsumerAllowlistCount);
     return true;
 }

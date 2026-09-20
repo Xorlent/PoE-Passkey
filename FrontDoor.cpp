@@ -6,6 +6,8 @@
 
 #include "Config.h"
 #include "FrontDoor.h"
+#include "Log.h"
+#include "Acl.h"
 #include <Arduino.h>
 #include <esp_log.h>
 #include <esp_heap_caps.h>
@@ -314,17 +316,17 @@ void frontdoor_begin() {
     s_blocklist = (uint32_t*)heap_caps_malloc(blocklistBytes, MALLOC_CAP_SPIRAM);
     if (s_blocklist == nullptr) {
         blocklistInPsram = false;
-        Serial.printf("[gate] PSRAM unavailable for the blocklist (%u B); falling back to internal RAM\n",
+        Log.printf("[gate] PSRAM unavailable for the blocklist (%u B); falling back to internal RAM\n",
                       (unsigned)blocklistBytes);
         s_blocklist = (uint32_t*)malloc(blocklistBytes);
     }
 
     if (s_blocklist == nullptr) {
-        Serial.printf("[gate] FATAL: no memory for the blocklist (%u B) - every request will be "
+        Log.printf("[gate] FATAL: no memory for the blocklist (%u B) - every request will be "
                       "refused, because frontdoor_blocked() fails closed\n", (unsigned)blocklistBytes);
     } else {
         memset(s_blocklist, 0, blocklistBytes); // 0 = EMPTY slot
-        Serial.printf("[gate] blocklist ready: %u slots, up to %u blocked IPs (%u B in %s)\n",
+        Log.printf("[gate] blocklist ready: %u slots, up to %u blocked IPs (%u B in %s)\n",
                       (unsigned)kBlocklistSlots, (unsigned)kBlocklistMaxEntries,
                       (unsigned)blocklistBytes, blocklistInPsram ? "PSRAM" : "internal RAM");
     }
@@ -383,14 +385,9 @@ bool frontdoor_throttle_over(uint32_t ip) {
     return over;
 }
 
-// Admin IPs (Config.h kAdminIPs) are never hard-blocked, whatever the trigger.
+// Admin IPs are never hard-blocked, whatever the trigger (the runtime allowlist).
 static bool frontdoor_ip_is_admin(uint32_t ip) {
-    for (uint32_t i = 0; i < kAdminIPCount; ++i) {
-        if ((uint32_t)kAdminIPs[i] == ip) {
-            return true;
-        }
-    }
-    return false;
+    return acl_is_admin(ip);
 }
 
 void frontdoor_block_ip_reason(uint32_t ip, const char* why) {
@@ -410,9 +407,9 @@ void frontdoor_block_ip_reason(uint32_t ip, const char* why) {
     // Log outside the critical section.
     IPAddress a(ip);
     if (why) {
-        Serial.printf("[block] %s: %s\n", a.toString().c_str(), why);
+        Log.printf("[block] %s: %s\n", a.toString().c_str(), why);
     } else {
-        Serial.printf("[block] %s\n", a.toString().c_str());
+        Log.printf("[block] %s\n", a.toString().c_str());
     }
 }
 
@@ -434,7 +431,7 @@ bool frontdoor_unblock_ip(uint32_t ip) {
 
     if (removed) {
         IPAddress a(ip);
-        Serial.printf("[block] unblocked %s\n", a.toString().c_str());
+        Log.printf("[block] unblocked %s\n", a.toString().c_str());
     }
     return removed;
 }
@@ -449,7 +446,7 @@ void frontdoor_clear_blocklist() {
     s_blocklistCursor = 0;
     portEXIT_CRITICAL(&s_gateLock);
 
-    Serial.println("[block] blocklist cleared");
+    Log.println("[block] blocklist cleared");
 }
 
 uint16_t frontdoor_blocklist_count() {
@@ -592,35 +589,35 @@ bool frontdoor_admit_request(httpd_req_t* req) {
         status = "403 Forbidden";
         body = "{\"error\":\"cross_site\"}";
         if (ip == 0) {
-            Serial.println("[gate] refused a cross-site request from an unidentified peer");
+            Log.println("[gate] refused a cross-site request from an unidentified peer");
         } else {
             IPAddress a(ip);
-            Serial.printf("[gate] refused a cross-site request from %s (not blocked: a browser "
+            Log.printf("[gate] refused a cross-site request from %s (not blocked: a browser "
                           "acted for another origin)\n", a.toString().c_str());
         }
     } else if (req->method == HTTP_POST && !request_is_json(req)) {
         status = "415 Unsupported Media Type";
         body = "{\"error\":\"json_required\"}";
         if (ip == 0) {
-            Serial.println("[gate] refused a non-JSON POST from an unidentified peer");
+            Log.println("[gate] refused a non-JSON POST from an unidentified peer");
         } else {
             IPAddress a(ip);
-            Serial.printf("[gate] refused a non-JSON POST from %s\n", a.toString().c_str());
+            Log.printf("[gate] refused a non-JSON POST from %s\n", a.toString().c_str());
         }
     } else if (ip == 0) {
         status = "403 Forbidden";
         body = "{\"error\":\"forbidden\"}";
-        Serial.println("[gate] refused a request from an unidentified peer");
+        Log.println("[gate] refused a request from an unidentified peer");
     } else if (frontdoor_blocked(ip)) {
         status = "403 Forbidden";
         body = "{\"error\":\"forbidden\"}";
         IPAddress a(ip);
-        Serial.printf("[gate] refused a request from blocklisted IP %s\n", a.toString().c_str());
+        Log.printf("[gate] refused a request from blocklisted IP %s\n", a.toString().c_str());
     } else if (frontdoor_throttle_over(ip)) {
         status = "429 Too Many Requests";
         body = "{\"error\":\"rate_limited\"}";
         IPAddress a(ip);
-        Serial.printf("[gate] refused a request from %s (over the connection budget)\n",
+        Log.printf("[gate] refused a request from %s (over the connection budget)\n",
                       a.toString().c_str());
     } else {
         return true;
@@ -646,7 +643,7 @@ esp_err_t frontdoor_on_open(httpd_handle_t hd, int sockfd) {
             static bool loggedNoDelay = false;
             if (!loggedNoDelay) {
                 loggedNoDelay = true;
-                Serial.println("[gate] TCP_NODELAY could not be set on a connection; short "
+                Log.println("[gate] TCP_NODELAY could not be set on a connection; short "
                                "responses may wait out the peer's delayed ACK");
             }
         }
@@ -657,13 +654,13 @@ esp_err_t frontdoor_on_open(httpd_handle_t hd, int sockfd) {
     uint32_t ip = frontdoor_peer_ipv4(sockfd);
     if (ip == 0) {
         // Unidentifiable peer -> fail closed.
-        Serial.println("[gate] connection from an unidentified peer; its requests will be refused");
+        Log.println("[gate] connection from an unidentified peer; its requests will be refused");
         return ESP_FAIL;
     }
 
     IPAddress a(ip);
     if (!frontdoor_admit(ip)) {
-        Serial.printf("[gate] connection from %s is blocklisted or over budget; its requests will be refused\n",
+        Log.printf("[gate] connection from %s is blocklisted or over budget; its requests will be refused\n",
                       a.toString().c_str());
         return ESP_FAIL;
     }
