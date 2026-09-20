@@ -330,8 +330,6 @@ static esp_err_t admin_denied(httpd_req_t* req, const char* what) {
     const uint32_t peer = req_client_ip(req);
     IPAddress ip(peer);
     const String ipStr = ip.toString();
-    char body[80];
-    snprintf(body, sizeof(body), "{\"error\":\"not_admin_ip\",\"ip\":\"%s\"}", ipStr.c_str());
     Serial.printf("[admin] %s refused: %s is not in kAdminIPs (Config.h)\n", what, ipStr.c_str());
 
     if (kBlockNonAdminIPOnAdminRoute) {
@@ -348,7 +346,22 @@ static esp_err_t admin_denied(httpd_req_t* req, const char* what) {
         }
     }
 
-    return send_json_status(req, "403 Forbidden", body);
+    // 404, not 403: from a non-admin IP this is indistinguishable from a route that
+    // does not exist, so the caller learns nothing about which routes the device has.
+    return send_json_status(req, "404 Not Found", "{\"error\":\"not_found\"}");
+}
+
+// A request for a URI no route handles: treat as a scanner probe and block the peer
+// (when kBlockScanners), then answer 404. Mirrors admin_denied()'s allowlist guard.
+static esp_err_t handler_not_found(httpd_req_t* req, httpd_err_code_t error) {
+    (void)error;
+    const uint32_t peer = req_client_ip(req);
+    if (kBlockScanners && peer != 0 &&
+        !ip_in_list(peer, kAdminIPs, kAdminIPCount) &&
+        !ip_in_list(peer, kConsumerAllowlist, kConsumerAllowlistCount)) {
+        frontdoor_block_ip_reason(peer, "scanner probe: non-existent route");
+    }
+    return send_json_status(req, "404 Not Found", "{\"error\":\"not_found\"}");
 }
 
 ////////---------------------------------------        HTTP handlers        ---------------------------------------////////
@@ -814,9 +827,8 @@ static esp_err_t handler_admin_revoke_credential(httpd_req_t* req) {
 
 // POST /admin/set-credential-disabled - { "id": "<base64url>", "disabled": true|false }
 //
-// The REVERSIBLE counterpart of /admin/revoke-credential: the credential keeps its record
-// (identity, signature counter, last-used date) and simply fails authentication until it is
-// enabled again.
+// The credential keeps its record (identity, signature counter, last-used date) and 
+// simply fails authentication until it is enabled again.
 static esp_err_t handler_admin_set_credential_disabled(httpd_req_t* req) {
     if (!frontdoor_admit_request(req)) {
         return ESP_FAIL; // rejection response already sent; drop the connection
@@ -975,7 +987,6 @@ static const httpd_uri_t uri_favicon = {
 static const httpd_uri_t uri_admin_page = {
     .uri = "/admin", .method = HTTP_GET, .handler = handler_admin_page, .user_ctx = nullptr
 };
-
 static const httpd_uri_t uri_register_start = {
     .uri = "/register/start", .method = HTTP_POST, .handler = handler_register_start, .user_ctx = nullptr
 };
@@ -1035,6 +1046,14 @@ static void register_handlers(httpd_handle_t server) {
     register_one(server, &uri_admin_authorized_ips);
     register_one(server, &uri_admin_revoke_ip);
     register_one(server, &uri_admin_set_credential_disabled);
+
+    // A request for an unregistered URI (a scanner probe) lands here: the 404 error
+    // callback blocks the peer when kBlockScanners and answers 404.
+    const esp_err_t err404 = httpd_register_err_handler(server, HTTPD_404_NOT_FOUND, handler_not_found);
+    if (err404 != ESP_OK) {
+        Serial.printf("[httpd] could not register the 404 handler (%s); scanner blocking is off\n",
+                      esp_err_to_name(err404));
+    }
 }
 
 ////////---------------------------------------        setup / loop        ---------------------------------------////////

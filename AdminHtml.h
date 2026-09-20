@@ -133,7 +133,6 @@ const postJson = (url, payload) => request(url, 'POST', payload);
 const getJson = (url) => request(url, 'GET');
 
 const HINTS = {
-  not_admin_ip: 'this source IP is not in kAdminIPs (Config.h)',
   invalid_email: 'not a usable email address - check for a typo, a stray space or a missing domain',
   busy: 'no free ceremony slot (kMaxSessions) - retry shortly',
   rate_limited: 'this IP is over its connection budget - retry shortly'
