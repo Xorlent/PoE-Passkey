@@ -312,15 +312,19 @@ static bool parse_cose_key(const uint8_t* d, size_t n, uint8_t x[32], uint8_t y[
         if (!cborReadInt(d, n, &pos, &key)) return false;
 
         if (key == 1) {
+            if (haveKty) return false;  // duplicate kty: fail closed
             if (!cborReadInt(d, n, &pos, &kty)) return false;
             haveKty = true;
         } else if (key == 3) {
+            if (haveAlg) return false;  // duplicate alg
             if (!cborReadInt(d, n, &pos, &alg)) return false;
             haveAlg = true;
         } else if (key == -1) {
+            if (haveCrv) return false;  // duplicate crv
             if (!cborReadInt(d, n, &pos, &crv)) return false;
             haveCrv = true;
         } else if (key == -2) {
+            if (haveX) return false;     // duplicate x
             const uint8_t* v;
             size_t vl;
             if (!cborReadBytes(d, n, &pos, &v, &vl)) return false;
@@ -328,6 +332,7 @@ static bool parse_cose_key(const uint8_t* d, size_t n, uint8_t x[32], uint8_t y[
             memcpy(x, v, 32);
             haveX = true;
         } else if (key == -3) {
+            if (haveY) return false;     // duplicate y
             const uint8_t* v;
             size_t vl;
             if (!cborReadBytes(d, n, &pos, &v, &vl)) return false;
@@ -340,7 +345,8 @@ static bool parse_cose_key(const uint8_t* d, size_t n, uint8_t x[32], uint8_t y[
     }
 
     if (!haveKty || !haveAlg || !haveCrv || !haveX || !haveY) return false;
-    return (kty == 2 && alg == -7 && crv == 1);
+    // Reject trailing bytes: the COSE key must be exactly this map, nothing after it.
+    return (kty == 2 && alg == -7 && crv == 1) && (pos == n);
 }
 
 // ---------------------------------------------------------------------------
@@ -567,6 +573,17 @@ bool webauthn_register_finish(const char* body, size_t bodyLen) {
         if (kWebAuthnFailureLog) {
             Serial.printf("[webauthn] %s: the COSE public key (%u bytes) is malformed or not "
                           "ES256/P-256 (kty 2, crv 1)\n", __func__, (unsigned)coseKeyLen);
+        }
+        return false;
+    }
+
+    // S2: reject keys that are not valid P-256 points before persisting them. An
+    // off-curve or identity-element key would otherwise make the assertion's
+    // signature forgeable without any private key.
+    if (!crypto_p256_pubkey_valid(x, y)) {
+        if (kWebAuthnFailureLog) {
+            Serial.printf("[webauthn] %s: the COSE public key is not a valid P-256 point "
+                          "(off-curve or the identity element)\n", __func__);
         }
         return false;
     }

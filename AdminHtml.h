@@ -41,6 +41,9 @@ static const char kAdminHtml[] = R"RAW(<!DOCTYPE html>
  .state.off{color:#b3261e}
  .when{color:#555;font-size:.9em}
  .confirm{color:#b3261e;font-weight:600}
+ .pop{position:relative;display:inline-block}
+ .pop .panel{position:absolute;right:0;top:calc(100% + .4em);z-index:20;background:#fff;border:1px solid #bbb;border-radius:6px;box-shadow:0 2px 10px rgba(0,0,0,.18);padding:.45em .55em;white-space:nowrap;display:none;align-items:center;gap:.5em}
+ .pop .panel.open{display:flex}
  #status{margin-top:1em;white-space:pre-wrap}
  #status.err{color:#b3261e}
  footer{margin-top:2em;border-top:1px solid #e3e3e3;padding-top:.75em;color:#555}
@@ -170,28 +173,59 @@ function selectTab(name, focus) {
 }
 
 function revokeControl(onConfirm) {
+  const wrap = document.createElement('span');
+  wrap.className = 'pop';
+
   const ask = document.createElement('button');
   ask.type = 'button';
   ask.className = 'act';
   ask.textContent = 'Revoke';
+
+  const panel = document.createElement('span');
+  panel.className = 'panel';
+
   const warn = document.createElement('span');
   warn.className = 'confirm';
   warn.textContent = 'Revoke permanently?';
+
   const yes = document.createElement('button');
   yes.type = 'button';
   yes.className = 'act';
   yes.textContent = 'Yes, revoke';
+
   const no = document.createElement('button');
   no.type = 'button';
   no.className = 'act';
   no.textContent = 'Cancel';
-  warn.hidden = true; yes.hidden = true; no.hidden = true;
-  ask.addEventListener('click', () => { ask.hidden = true; warn.hidden = false; yes.hidden = false; no.hidden = false; });
-  no.addEventListener('click', () => { yes.hidden = true; no.hidden = true; warn.hidden = true; ask.hidden = false; });
-  yes.addEventListener('click', () => { yes.disabled = true; no.disabled = true; onConfirm(); });
-  const box = document.createElement('span');
-  box.append(ask, warn, yes, no);
-  return box;
+
+  panel.append(warn, yes, no);
+  wrap.append(ask, panel);
+
+  function close() {
+    panel.classList.remove('open');
+    document.removeEventListener('click', onDocClick);
+    document.removeEventListener('keydown', onKey);
+  }
+  function open() {
+    panel.classList.add('open');
+    document.addEventListener('click', onDocClick);
+    document.addEventListener('keydown', onKey);
+  }
+  function onDocClick(e) {
+    if (!wrap.contains(e.target)) close();
+  }
+  function onKey(e) {
+    if (e.key === 'Escape') close();
+  }
+
+  ask.addEventListener('click', (e) => {
+    e.stopPropagation();
+    panel.classList.contains('open') ? close() : open();
+  });
+  no.addEventListener('click', () => close());
+  yes.addEventListener('click', () => { close(); onConfirm(); });
+
+  return wrap;
 }
 
 function formatWhen(unix) {

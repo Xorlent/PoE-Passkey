@@ -150,9 +150,51 @@ static bool der_sig_to_rs(const uint8_t* der, size_t len, uint8_t r[32], uint8_t
     return pos == len; // no trailing bytes
 }
 
+// Is (x, y) a valid P-256 public key? Rejects the identity element, zero
+// coordinates, out-of-range values, and off-curve points. mbedtls_ecp_point_read_binary()
+// does NOT check curve membership (documented in ecp.h), and mbedtls_ecdsa_verify()
+// does not either, so this must run before a key is stored or a signature accepted.
+bool crypto_p256_pubkey_valid(const uint8_t x[32], const uint8_t y[32]) {
+    // Fast, reviewable reject of the identity element: (0,0) is off-curve because
+    // P-256's curve constant b != 0. Short-circuits before any MPI work.
+    bool anyX = false, anyY = false;
+    for (size_t i = 0; i < 32; ++i) {
+        anyX = anyX || (x[i] != 0);
+        anyY = anyY || (y[i] != 0);
+    }
+    if (!anyX || !anyY) return false;
+
+    mbedtls_ecp_group grp;
+    mbedtls_ecp_point Q;
+    mbedtls_ecp_group_init(&grp);
+    mbedtls_ecp_point_init(&Q);
+
+    bool ok = false;
+    uint8_t point[65];
+    point[0] = 0x04;                 // uncompressed
+    memcpy(point + 1, x, 32);
+    memcpy(point + 33, y, 32);
+
+    if (mbedtls_ecp_group_load(&grp, MBEDTLS_ECP_DP_SECP256R1) != 0) goto done;
+    if (mbedtls_ecp_point_read_binary(&grp, &Q, point, sizeof(point)) != 0) goto done;
+    // Range (0 <= x,y < p) AND the curve equation y^2 = x^3 - 3x + b.
+    if (mbedtls_ecp_check_pubkey(&grp, &Q) != 0) goto done;
+    ok = true;
+
+done:
+    mbedtls_ecp_point_free(&Q);
+    mbedtls_ecp_group_free(&grp);
+    return ok;
+}
+
 bool crypto_verify_es256(const uint8_t pubX[32], const uint8_t pubY[32],
                          const uint8_t* msg, size_t mLen,
                          const uint8_t* derSig, size_t sigLen) {
+    // S2: reject a public key that is not a valid P-256 point before any
+    // signature work. Enrollment also validates, but a credential stored by a
+    // pre-fix firmware (or restored from a backup) still reaches this path.
+    if (!crypto_p256_pubkey_valid(pubX, pubY)) return false;
+
     uint8_t hash[32];
     crypto_sha256(msg, mLen, hash);
 

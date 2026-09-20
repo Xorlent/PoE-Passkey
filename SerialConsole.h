@@ -11,6 +11,10 @@
 // Poll for a serial command. Call from loop().
 void serial_console_poll();
 
+// Run the crypto self-test (P-256 point validation + ES256 verify) and print a
+// single pass/fail line. Returns true on pass. Called at boot and by `selftest`.
+bool run_selftest();
+
 // Print heap + PSRAM headroom to Serial, labelled with `when`. Called at boot
 // (before/after the TLS server starts) and by the `stats` command.
 //

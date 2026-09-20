@@ -211,12 +211,6 @@ static bool page_buffer_begin() {
 // __CLIENT_IP__ and __CSP_NONCE__. Returns the rendered length, or 0 if `out` cannot hold
 // the result.
 //
-// There is deliberately no admin-link placeholder: nothing the server sends names the
-// admin console, because a browser can read every byte of every document it is given
-// (View Source, devtools). A link that was merely hidden - display:none plus a
-// data-admin flag for the page's script - was readable there, so it was removed rather
-// than substituted conditionally. The console is documented in the README.
-//
 // __CSP_NONCE__ is the per-response nonce that also goes into the Content-Security-Policy
 // header (send_page below). It must be the SAME string in both places or the page's own
 // <style>/<script> are refused and the document does nothing.
@@ -232,10 +226,6 @@ static bool page_buffer_begin() {
 // too. That path is unreachable with the shipping templates (kPageBufCap is sized from them
 // plus the largest substitution; see its comment).
 //
-// The token/value tables are locals on purpose: a file-scope struct declared here
-// would sit after the first function definition, i.e. after the point where the
-// Arduino builder inserts its generated prototypes, and the type would not be
-// visible to them.
 static size_t render_page(const char* tpl, char* out, size_t cap,
                           const char* ip, const char* nonce) {
     static const char* const kTokens[] = { "__CLIENT_IP__", "__CSP_NONCE__" };
@@ -279,9 +269,7 @@ static size_t render_page(const char* tpl, char* out, size_t cap,
 // Page responses: one CSP nonce per response, and the header that carries it
 // ---------------------------------------------------------------------------
 
-// 16 random bytes (128 bits) is the usual nonce size, and guessing it is what the policy
-// rests on. Hex rather than base64url keeps the value a plain token for both the header and
-// the attribute: no escaping, no +/ or = to misquote.
+// 16 random bytes (128 bits)
 static const size_t kCspNonceBytes = 16;
 static const size_t kCspNonceLen = kCspNonceBytes * 2; // 32 hex characters
 
@@ -463,10 +451,7 @@ static int extract_field(const char* body, size_t len, const char* key,
     return -1;
 }
 
-// Extract a JSON boolean field ("key":true / false, also accepting 1 / 0). Fails closed:
-// a missing field is NOT "false", because the caller has to tell those apart (enable is
-// spelled disabled=false). Same reach as extract_field: it finds the key it expects, it is
-// not a parser.
+// Extract a JSON boolean field ("key":true / false, also accepting 1 / 0). Fails closed
 static bool extract_bool(const char* body, size_t len, const char* key, bool* out) {
     size_t klen = strlen(key);
     if (klen + 2 > len) return false;
@@ -487,8 +472,7 @@ static bool extract_bool(const char* body, size_t len, const char* key, bool* ou
 }
 
 // POST /register/start - enrollment options. Admin-IP gated: the source IP is the
-// only gate, and the identity becomes whatever well-formed address is posted (it is
-// used as both name and displayName - see WebAuthn.h).
+// only gate, and the identity becomes the entered email address
 static esp_err_t handler_register_start(httpd_req_t* req) {
     if (!frontdoor_admit_request(req)) {
         return ESP_FAIL; // rejection response already sent; drop the connection
@@ -527,13 +511,10 @@ static esp_err_t handler_register_start(httpd_req_t* req) {
 
     int n = webauthn_register_start(email, out, sizeof(out), req_client_ip(req));
     if (n == -2) {
-        // Unusable address (email_is_usable() in WebAuthn.cpp). No allowlist is
-        // involved: enrollment is gated by the source IP checked above, so the identity
-        // is whatever the operator typed - and a typo becomes a wrong identity, which
-        // is why the address is logged.
+        // Unusable address (email_is_usable() in WebAuthn.cpp).
         free(body);
         // The address is caller-supplied AND reached this line by failing validation, so it
-        // may contain anything: print it sanitized (SafePrint.h) rather than raw.
+        // may contain anything: print it sanitized
         Serial.printf("[admin] POST /register/start refused: '");
         safe_print(email, 64);
         Serial.printf("' is not a usable email address\n");
@@ -682,13 +663,6 @@ static esp_err_t handler_authorized_ips(httpd_req_t* req) {
     if (!crypto_const_eq_str(key, strlen(key), kConsumerSecret, strlen(kConsumerSecret))) {
         // Deliberately vague to the caller: an allowlisted peer with the wrong secret
         // is either misconfigured or guessing.
-        //
-        // The console gets the SUPPLIED value in full - sanitized, and never compared or
-        // shown against the real secret - because a rejected key is the one thing that
-        // cannot be debugged from the client side, and the common causes are typos: a
-        // trailing space, the wrong case, a stale copy of the secret. This is the single
-        // deliberate exception to the masking in print_uri_masked(), and it only applies
-        // to requests that FAILED: a successful poll shows '***'.
         Serial.print("[consumer] GET /authorized-ips refused: bad ?key= value '");
         safe_print(key, 64);
         Serial.printf("' (%u bytes, supplied) from %s\n",
@@ -740,12 +714,6 @@ static esp_err_t handler_authorized_ips(httpd_req_t* req) {
 ////////---------------------------------------        Admin revocation handlers        ---------------------------------------////////
 
 // GET /admin/credentials - list registered credentials (admin IP only).
-//
-// STREAMED (chunked) rather than assembled into one buffer. The old shape copied every
-// record out of NVS into a kMaxCredentials-sized array and rendered that into a fixed 4 KB
-// JSON buffer whose overflow check silently truncated the array - and a truncated array has
-// no closing bracket, so the admin page could only show "Error:" with no hint of why.
-// Streaming removes both limits: one credential at a time, ~700 B of stack, no heap.
 struct CredStream {
     httpd_req_t* req;
     bool first;
@@ -763,10 +731,7 @@ static bool stream_credential(const StoredCredential* c, const CredRuntime* rt, 
     // email was whitelisted before storage).
     char item[MAX_CRED_ID_LEN * 2 + 4 + MAX_EMAIL_LEN + 64];
 
-    // usedThisBoot is omitted entirely when the store cannot tell (-1), rather than reported
-    // as false: "unknown" and "not used since boot" are different answers, and the page
-    // draws nothing for the first. lastSeenUnix has its own sentinel (0 = the device had no
-    // clock at the time), and disabled is always known.
+    // usedThisBoot is omitted entirely when the store cannot tell (-1)
     char usedFlag[32];
     usedFlag[0] = 0;
     if (rt->usedThisBoot >= 0) {
@@ -851,7 +816,7 @@ static esp_err_t handler_admin_revoke_credential(httpd_req_t* req) {
 //
 // The REVERSIBLE counterpart of /admin/revoke-credential: the credential keeps its record
 // (identity, signature counter, last-used date) and simply fails authentication until it is
-// enabled again. Disabling writes only the 12-byte state entry, never the credential.
+// enabled again.
 static esp_err_t handler_admin_set_credential_disabled(httpd_req_t* req) {
     if (!frontdoor_admit_request(req)) {
         return ESP_FAIL; // rejection response already sent; drop the connection
@@ -894,18 +859,7 @@ static esp_err_t handler_admin_set_credential_disabled(httpd_req_t* req) {
     return send_json(req, ok ? "{\"ok\":true}" : "{\"ok\":false}");
 }
 
-// POST /admin/time is deliberately absent: the device takes its time from NTP (Config.h
-// ntpSvr, Clock.h), not from whoever opens the console. A browser-supplied time would be
-// exactly as trustworthy as the machine that sent it, and the whole point of the last-used
-// column is that an operator can act on it - so the one source is the one that is synced.
-
 // GET /admin/authorized-ips - the currently-valid authorized IPs AND who is behind each one.
-//
-// Streamed (chunked): the response grows with (addresses x users), so one address and one
-// email are sent at a time instead of assembling a fixed buffer that could truncate.
-//
-// Response: [{"ip":"192.168.1.5","users":["a@b.c"]}, ...]. `users` is empty for an address that
-// nobody is attributed to (authorized before this was recorded, or its key was revoked since).
 static esp_err_t handler_admin_authorized_ips(httpd_req_t* req) {
     if (!frontdoor_admit_request(req)) {
         return ESP_FAIL; // rejection response already sent; drop the connection
@@ -941,9 +895,7 @@ static esp_err_t handler_admin_authorized_ips(httpd_req_t* req) {
             break;
         }
 
-        // One attributed key at a time. The email needs no JSON escaping: email_is_usable()
-        // rejected quotes, backslashes and control characters before it was ever stored - the
-        // same guarantee /admin/credentials relies on for the same field.
+        // One attributed key at a time. The email needs no JSON escaping due to email_is_usable()
         uint16_t cursor = 0;
         uint16_t slot = 0;
         bool firstUser = true;
@@ -1058,10 +1010,6 @@ static const httpd_uri_t uri_admin_set_credential_disabled = {
     .uri = "/admin/set-credential-disabled", .method = HTTP_POST, .handler = handler_admin_set_credential_disabled, .user_ctx = nullptr
 };
 
-// Register one route and SAY SO if it fails. httpd_register_uri_handler() returns an error
-// when the handler table is full (cfg.httpd.max_uri_handlers), and a route that silently
-// does not exist is invisible until a client gets a 404 - which is a bad way to discover
-// that one line of the table below was added without growing the limit.
 static void register_one(httpd_handle_t server, const httpd_uri_t* uri) {
     const esp_err_t err = httpd_register_uri_handler(server, uri);
     if (err != ESP_OK) {
@@ -1198,12 +1146,7 @@ void setup() {
     }
     Serial.println("PoE-Passkey: starting...");
 
-    // Report PSRAM before anything else can report a fallback. The verdict comes from
-    // the heap (an absent or failed PSRAM has no MALLOC_CAP_SPIRAM total - the same
-    // source memory_report() uses), with psramFound() shown alongside it: the blocklist,
-    // the page render buffer and the ceremony scratch arena all prefer PSRAM, so this
-    // line is the context for any "[gate]/[page]/[webauthn] ... falling back" message
-    // that follows.
+    // Report PSRAM before anything else can report a fallback.
     const size_t psramTotal = heap_caps_get_total_size(MALLOC_CAP_SPIRAM);
     Serial.printf("PSRAM: %s - %u B total, %u B free (psramFound()=%s)\n",
                   psramTotal ? "usable" : "NOT USABLE",
@@ -1219,6 +1162,10 @@ void setup() {
         }
     }
 
+    // Crypto self-test: prove the P-256 point validation (S2) and the ES256 verify
+    // path work before anything depends on them. Pass/fail only.
+    run_selftest();
+
     // Ethernet bring-up (Unit-PoE-P4).
     ESP_LOGI(TAG, "Initializing Ethernet...");
     ETH.begin(ETH_TYPE, ETH_ADDR, ETH_PHY_MDC, ETH_PHY_MDIO, ETH_POWER_PIN, ETH_CLK_MODE);
@@ -1230,10 +1177,7 @@ void setup() {
     Serial.print("Ethernet connected, IP: ");
     Serial.println(ETH.localIP());
 
-    // Wall clock (NTP). Started here because a sync needs DNS (for a hostname) and a route;
-    // it never blocks - see Clock.h - so the listener below comes up regardless and the first
-    // sync lands a few seconds later. Until then the device dates nothing rather than dating
-    // it wrong, and authentication is unaffected: the clock never authorizes anything.
+    // Start NTP client
     clock_begin();
 
     // Pre-payload gate stores (throttle ring + PSRAM blocklist).
@@ -1250,8 +1194,6 @@ void setup() {
     const uint8_t* keyPem;
     size_t keyLen;
     if (!resolve_tls(&certPem, &certLen, &keyPem, &keyLen)) {
-        // Name which half is missing: the two situations have different causes (a wrong or
-        // half-finished `import`), and the console is where it gets fixed.
         const bool haveCert = certstore_has_cert();
         const bool haveKey  = certstore_has_key();
         const char* msg;
@@ -1266,74 +1208,14 @@ void setup() {
     ESP_LOGI(TAG, "Starting HTTPS server on port 443...");
     httpd_ssl_config_t cfg = HTTPD_SSL_CONFIG_DEFAULT();
     cfg.httpd.max_uri_handlers = 16;
-    // 6 = Chrome's per-origin socket pool, so a page load's connections all get a
-    // session slot instead of being closed by lru_purge and retried. Each open
-    // session costs heap: watch it with log_memory_report().
-    //
-    // NOT a fix for handshake errors: in a log full of
-    // "mbedtls_ssl_handshake returned", -0x7780 is
-    // MBEDTLS_ERR_SSL_FATAL_ALERT_MESSAGE ("a fatal alert message was received
-    // from our peer") - the CLIENT aborting the handshake over the certificate -
-    // and -0x7280 is a bare connection EOF, what a browser does to a pre-connect
-    // socket it decided not to use. Both are the client's verdict on the
-    // certificate (see README, "Trusting the certificate in the browser"), not
-    // socket-pool exhaustion on this side.
     cfg.httpd.max_open_sockets = 6;
     s_maxOpenSockets = cfg.httpd.max_open_sockets;
-    // LRU purge: when all max_open_sockets slots are in use, accept the new connection anyway
-    // and close the least recently used one (httpd_accept_conn -> httpd_sess_close_lru). Keep it
-    // ON: the appliance has 6 slots, and without it httpd_servers' `if (lru_purge_enable ||
-    // httpd_is_sess_available(hd))` removes the LISTENING socket from the select set entirely
-    // while the slots are full, so abandoned sessions (a crashed tab, a machine that moved to
-    // Wi-Fi) lock everyone out until TCP keep-alive reaps them (~14 s here).
-    //
-    // WHAT IT IS NOT: the eviction trigger is httpd's OWN session count (`httpd_is_sess_available`,
-    // i.e. max_open_sockets) - NOT the lwIP socket table. It cannot help when the socket table is
-    // exhausted (that was "Socket slots: 0 free, HTTP sessions: 2 open": free session slots, none
-    // free to accept into), and it is not an anti-flood control: a purge gives the slot straight to
-    // whoever connects next. The L2 gate + blocklist are the flood control; this is availability.
-    // The eviction is also asynchronous (queued over the ctrl socket, best-effort with a retry),
-    // and it can evict a session whose request arrived but was not read yet (the LRU filter skips
-    // only for_async_req sessions, not pending data).
     cfg.httpd.lru_purge_enable = true;
     cfg.httpd.backlog_conn = 8;
-    // Per-socket SO_RCVTIMEO/SO_SNDTIMEO, applied by httpd_accept_conn to every accepted
-    // connection BEFORE the open_fn that completes the TLS handshake - so they cover the
-    // handshake, the request read and the response write, and bound how long a peer making NO
-    // progress can hold the ONE httpd task (the same single-task exposure as the accept-loop note
-    // in FrontDoor.cpp).
-    //
-    // A STALL TIMER, NOT A TRANSFER DEADLINE - which is why the size of /admin cannot trip it:
-    // each send()/recv() waits at most this long for PROGRESS, and lwIP re-waits per refill
-    // (netconn_write_partly -> sys_arch_sem_wait), so a slow but steady client is never cut off
-    // however large the body is. The bodies fit regardless: the largest single send here is
-    // /authorized-ips at ~4 KB (kMaxAuthorizedIPs * 16 + 1); both admin listings STREAM instead
-    // (one credential per chunk, one address + one email per chunk),
-    // and this build's socket send buffer is 64 KB (CONFIG_LWIP_TCP_SND_BUF_DEFAULT = 65534).
-    // 2 s is >10x the TLS handshake time, so it never trips on a slow-but-normal handshake.
-    //
-    // WHAT HAPPENS WHEN IT FIRES: lwip_send() returns -1 rather than a partial count, so
-    // httpd_send_all aborts the response and the session is deleted - a truncated page the client
-    // reloads, which is the right outcome for a peer that has stopped reading.
-    //
-    // Idle keep-alive sessions are NOT affected (an idle socket is never selected, so no read ever
-    // waits on it); they are reaped by TCP keep-alive below.
     cfg.httpd.recv_wait_timeout = 2;
     cfg.httpd.send_wait_timeout = 2;
-    // The TLS handshake runs on this task (httpd's accept loop), so it needs
-    // esp_https_server's default of 10240, not a plain-HTTP size.
     cfg.httpd.stack_size = 10240;
-    // Keep-alive: one TLS session serves a whole page load. Without it every
-    // response closes the connection, so every resource costs a fresh handshake
-    // and the browser abandons its surplus sockets mid-handshake.
     cfg.httpd.keep_alive_enable = true;
-    // TCP keep-alive (TCP_KEEPIDLE/INTVL/CNT). A DEAD-PEER probe, NOT an HTTP idle timeout: it
-    // is the only thing that reaps a peer that vanished silently (pulled cable, slept laptop,
-    // dropped Wi-Fi), because an idle session is never selected and so never reaches the
-    // SO_RCVTIMEO above. 5 + 3x3 = ~14 s until the probes give up, against 2 h+ for the OS
-    // defaults. A LIVE idle peer answers them: a browser's keep-alive connection is not closed
-    // by this, it stays open (holding its ~32 KB of TLS buffers) until the browser closes it or
-    // LRU purge makes room for the next connection.
     cfg.httpd.keep_alive_idle = 5;       // seconds of no traffic before the first probe
     cfg.httpd.keep_alive_interval = 3;   // seconds between probes
     cfg.httpd.keep_alive_count = 3;      // unanswered probes before lwIP aborts the connection
@@ -1342,16 +1224,6 @@ void setup() {
     cfg.httpd.close_fn = frontdoor_on_close;
     cfg.transport_mode = HTTPD_SSL_TRANSPORT_SECURE;
     cfg.port_secure = 443;
-    // NOTE: PEM lengths MUST include the terminating NUL byte ("+ 1").
-    // mbedTLS 3.x (esp-tls uses 3.6.6 here) picks PEM-vs-DER by testing
-    // buf[buflen - 1] == '\0' (see mbedtls_x509_crt_parse and
-    // mbedtls_pk_parse_key). esp-tls forwards this length unchanged, and
-    // esp_https_server memcpy's exactly this many bytes - so a PEM whose
-    // length excludes the NUL is handed to the DER parser, which rejects the
-    // ASCII text with MBEDTLS_ERR_X509_INVALID_FORMAT (-0x2180) and makes
-    // httpd_ssl fail ("Failed to set server pki context"). The NVS store
-    // (certstore_*) is the only source and it keeps the material NUL-terminated
-    // (both the imported blob and the RAM copy), so counting that byte is safe.
     cfg.prvtkey_pem = keyPem;
     cfg.prvtkey_len = keyLen + 1;
     cfg.servercert = certPem;
@@ -1397,4 +1269,3 @@ void loop() {
 
     delay(100);
 }
-

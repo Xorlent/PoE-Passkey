@@ -35,6 +35,9 @@ static const uint32_t kMinTcpHeaderLen = 20;
 static const uint8_t kIpProtoTcp = 6;
 static const uint8_t kTcpFlagSyn = 0x02;
 static const uint8_t kTcpFlagAck = 0x10;
+static const uint8_t kEtherTypeIPv6Hi = 0x86;
+static const uint8_t kEtherTypeIPv6Lo = 0xDD;
+static const uint32_t kMinIp6HeaderLen = 40; // fixed IPv6 header (no extension headers)
 
 // Is `frame` a TCP connection request (SYN set, ACK clear) for `port`? On true,
 // *srcIp receives the sender's address in network byte order.
@@ -77,6 +80,32 @@ static bool is_syn_to_port(const uint8_t* frame, uint32_t len, uint16_t port, ui
     return true;
 }
 
+// Is `frame` an IPv6 packet addressed to TCP port `port`? The device is IPv4-only
+// (Config.h), so IPv6 has no legitimate use; refusing it here keeps IPv6 SYNs from
+// reaching the (expensive) TLS handshake that the IPv4-keyed gate cannot account for
+// (I6). Extension headers are not followed: a connection request does not carry them,
+// and an unparsed frame is simply forwarded (still refused at the request level).
+static bool is_ipv6_to_port(const uint8_t* frame, uint32_t len, uint16_t port) {
+    if (len < kEthHeaderLen + kMinIp6HeaderLen + kMinTcpHeaderLen) {
+        return false;
+    }
+    if (frame[12] != kEtherTypeIPv6Hi || frame[13] != kEtherTypeIPv6Lo) {
+        return false;
+    }
+
+    const uint8_t* ip6 = frame + kEthHeaderLen;
+    if ((ip6[0] >> 4) != 6) {
+        return false; // not IPv6
+    }
+    if (ip6[6] != kIpProtoTcp) {
+        return false; // next header is not TCP (extension headers are not followed)
+    }
+
+    const uint8_t* tcp = ip6 + kMinIp6HeaderLen;
+    const uint16_t dstPort = (uint16_t)((tcp[2] << 8) | tcp[3]);
+    return dstPort == port;
+}
+
 // The MAC's input path. Forwarding mirrors esp_eth_netif_glue.c's
 // eth_input_to_netif() exactly; refusing releases the frame the way the stack
 // releases every frame it consumes (see the ownership note in EthGate.h).
@@ -87,6 +116,17 @@ static esp_err_t eth_gate_input_info(esp_eth_handle_t ethHandle, uint8_t* buffer
     (void)info;
 
     ++s_frames;
+
+    // IPv6: refuse outright (the device is IPv4-only; see is_ipv6_to_port).
+    if (is_ipv6_to_port(buffer, length, s_port)) {
+        ++s_synsRefused;
+        if (s_refusalLogs < 3) {
+            ++s_refusalLogs;
+            ESP_LOGW(TAG, "Refused IPv6 frame to port %u at L2 (IPv4-only device)", (unsigned)s_port);
+        }
+        free(buffer);
+        return ESP_OK;
+    }
 
     uint32_t srcIp = 0;
     if (is_syn_to_port(buffer, length, s_port, &srcIp)) {

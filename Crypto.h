@@ -41,4 +41,9 @@ bool crypto_verify_es256(const uint8_t pubX[32], const uint8_t pubY[32],
                          const uint8_t* msg, size_t mLen,
                          const uint8_t* derSig, size_t sigLen);
 
+// Is (x, y) a valid P-256 public key (on-curve, not the identity element)?
+// Rejects zero coordinates, out-of-range values, and off-curve points. Call
+// before storing a credential (enrollment) and before verifying a signature.
+bool crypto_p256_pubkey_valid(const uint8_t x[32], const uint8_t y[32]);
+
 #endif // CRYPTO_H

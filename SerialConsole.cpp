@@ -10,6 +10,7 @@
 #include "SerialConsole.h"
 #include "CertStore.h"
 #include "Clock.h"
+#include "Crypto.h"
 #include "EthGate.h"
 #include "FrontDoor.h"
 #include "PasskeyStore.h"
@@ -19,6 +20,9 @@
 #include <string.h>
 #include <time.h>
 #include <esp_heap_caps.h>
+#include <mbedtls/bignum.h>
+#include <mbedtls/ecdsa.h>
+#include <mbedtls/ecp.h>
 
 // Static buffers (not on the 8 KB loopTask stack); the console is single-threaded.
 static char s_pem_raw[MAX_CERT_PEM_LEN + 1];
@@ -35,6 +39,7 @@ static void print_help() {
     Serial.println("  clear-cert    remove the imported certificate");
     Serial.println("  clear-key     remove the imported private key");
     Serial.println("  stats         show heap, socket table and L2 gate telemetry");
+    Serial.println("  selftest      run the crypto self-test (P-256 point validation + ES256)");
     Serial.println("  creds         list stored passkeys (and how full the store is)");
     Serial.println("  blocks        list blocked IPs (each block also logs its reason)");
     Serial.println("  unblock <ip>  remove one IP from the blocklist");
@@ -288,6 +293,125 @@ static void print_credentials() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// selftest: exercise the S2 fix (P-256 point validation) and the ES256 path.
+// ---------------------------------------------------------------------------
+
+// mbedTLS RNG callback, backed by the ESP32 hardware RNG (via crypto_random).
+static int selftest_rng(void* ctx, unsigned char* out, size_t len) {
+    (void)ctx;
+    crypto_random((uint8_t*)out, len);
+    return 0;
+}
+
+// Minimal DER SEQUENCE { INTEGER r, INTEGER s } encoder (the inverse of
+// der_sig_to_rs in Crypto.cpp). Returns the encoded length, or 0 on overflow.
+static size_t der_encode_int(const uint8_t* v, size_t n, uint8_t* out) {
+    size_t i = 0;
+    while (i < n - 1 && v[i] == 0) ++i;          // strip leading zeros
+    const size_t len = n - i;
+    const uint8_t pad = (v[i] & 0x80) ? 1 : 0;   // sign byte for a high bit
+    out[0] = 0x02;
+    out[1] = (uint8_t)(len + pad);
+    if (pad) out[2] = 0x00;
+    memcpy(out + 2 + pad, v + i, len);
+    return 2 + pad + len;
+}
+
+static size_t rs_to_der(const uint8_t r[32], const uint8_t s[32], uint8_t* out, size_t cap) {
+    uint8_t ri[35], si[35];
+    const size_t rl = der_encode_int(r, 32, ri);
+    const size_t sl = der_encode_int(s, 32, si);
+    const size_t body = rl + sl;
+    if (2 + body > cap) return 0;
+    out[0] = 0x30;
+    out[1] = (uint8_t)body;
+    memcpy(out + 2, ri, rl);
+    memcpy(out + 2 + rl, si, sl);
+    return 2 + body;
+}
+
+bool run_selftest() {
+    int failures = 0;
+
+    // Generator point G (a known-valid P-256 point).
+    static const uint8_t gx[32] = { 0x6b,0x17,0xd1,0xf2,0xe1,0x2c,0x42,0x47,0xf8,0xbc,0xe6,0xe5,0x63,0xa4,0x40,0xf2,0x77,0x03,0x7d,0x81,0x2d,0xeb,0x33,0xa0,0xf4,0xa1,0x39,0x45,0xd8,0x98,0xc2,0x96 };
+    static const uint8_t gy[32] = { 0x4f,0xe3,0x42,0xe2,0xfe,0x1a,0x7f,0x9b,0x8e,0xe7,0xeb,0x4a,0x7c,0x0f,0x9e,0x16,0x2b,0xce,0x33,0x57,0x6b,0x31,0x5e,0xce,0xcb,0xb6,0x40,0x68,0x37,0xbf,0x51,0xf5 };
+    static const uint8_t zero[32] = { 0 };
+    // p - 1 (the P-256 prime minus one).
+    static const uint8_t pm1[32] = { 0xff,0xff,0xff,0xff,0x00,0x00,0x00,0x01,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xfe };
+    static const uint8_t one[32] = { 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1 };
+
+    if (!crypto_p256_pubkey_valid(gx, gy)) ++failures;
+    if (crypto_p256_pubkey_valid(zero, zero)) ++failures;
+    if (crypto_p256_pubkey_valid(pm1, zero)) ++failures;
+    if (crypto_p256_pubkey_valid(one, one)) ++failures;
+
+    // S2 regression: a degenerate key must fail verification regardless of the
+    // signature (the guard runs before any signature parsing).
+    {
+        static const uint8_t msg[] = "PoE-Passkey selftest";
+        uint8_t junk[8] = { 0 };
+        if (crypto_verify_es256(zero, zero, msg, sizeof(msg) - 1, junk, sizeof(junk))) ++failures;
+    }
+
+    // End-to-end positive: generate a key, sign, and verify through the real path.
+    {
+        static const uint8_t msg[] = "PoE-Passkey selftest";
+        mbedtls_ecp_group grp;
+        mbedtls_ecp_point Q;
+        mbedtls_mpi d, r, s;
+        mbedtls_ecp_group_init(&grp);
+        mbedtls_ecp_point_init(&Q);
+        mbedtls_mpi_init(&d);
+        mbedtls_mpi_init(&r);
+        mbedtls_mpi_init(&s);
+
+        // All buffers are declared (and initialized) up front so no `goto` below
+        // crosses an initialization.
+        bool ok = false;
+        uint8_t hash[32] = { 0 };
+        uint8_t pub[65] = { 0 };
+        size_t pubLen = 0;
+        uint8_t rbuf[32] = { 0 }, sbuf[32] = { 0 };
+        uint8_t der[72] = { 0 };
+        size_t derLen = 0;
+
+        if (mbedtls_ecp_group_load(&grp, MBEDTLS_ECP_DP_SECP256R1) != 0) goto pos_done;
+        if (mbedtls_ecp_gen_keypair(&grp, &d, &Q, selftest_rng, nullptr) != 0) goto pos_done;
+
+        crypto_sha256(msg, sizeof(msg) - 1, hash);
+        if (mbedtls_ecdsa_sign(&grp, &r, &s, &d, hash, sizeof(hash), selftest_rng, nullptr) != 0) goto pos_done;
+
+        if (mbedtls_ecp_point_write_binary(&grp, &Q, MBEDTLS_ECP_PF_UNCOMPRESSED, &pubLen, pub, sizeof(pub)) != 0) goto pos_done;
+        if (pubLen != 65 || pub[0] != 0x04) goto pos_done;
+
+        if (mbedtls_mpi_write_binary(&r, rbuf, sizeof(rbuf)) != 0) goto pos_done;
+        if (mbedtls_mpi_write_binary(&s, sbuf, sizeof(sbuf)) != 0) goto pos_done;
+
+        derLen = rs_to_der(rbuf, sbuf, der, sizeof(der));
+        if (derLen == 0) goto pos_done;
+
+        if (!crypto_verify_es256(pub + 1, pub + 33, msg, sizeof(msg) - 1, der, derLen)) goto pos_done;
+        ok = true;
+
+    pos_done:
+        mbedtls_ecp_point_free(&Q);
+        mbedtls_ecp_group_free(&grp);
+        mbedtls_mpi_free(&d);
+        mbedtls_mpi_free(&r);
+        mbedtls_mpi_free(&s);
+        if (!ok) ++failures;
+    }
+
+    if (failures == 0) {
+        Serial.println("[selftest] elliptic curve test: PASS");
+        return true;
+    }
+    Serial.println("[selftest] elliptic curve test: FAIL");
+    return false;
+}
+
 void serial_console_poll() {
     if (!Serial.available()) return;
 
@@ -342,6 +466,8 @@ void serial_console_poll() {
         }
     } else if (cmd == "creds") {
         print_credentials();
+    } else if (cmd == "selftest") {
+        run_selftest();
     } else if (cmd == "stats") {
         memory_report("stats");
         // Socket-table telemetry: free socket slots vs open sessions.
