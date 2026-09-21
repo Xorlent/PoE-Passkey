@@ -210,6 +210,7 @@ Open `https://<your-domain>/admin` from an allowed admin IP. From there you can:
 - **Disable / re-enable** a key (disabled keys can't sign in until re-enabled).
 - **See authorized addresses** and who is behind each one.
 - **Revoke an address** immediately.
+- **Update / edit** Authorized admin and consumer IP lists (if `kRuntimeAllowlistEdits` = true)
 
 Only the IPs in `kAdminIPs` can reach these pages. Anyone else is refused, and by default
 their address is blocked on the spot (recoverable from the console - see `unblock`).
