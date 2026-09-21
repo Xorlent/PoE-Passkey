@@ -281,6 +281,7 @@ From the serial console: `unblock <ip>` (or `clear-blocks`). Consider whether `k
 ## Notes and Limitations
 
 - Support for 256 registered keys, 256 active authenticated IP addresses
+- IPv4 only; IPv6 traffic is dropped at L2
 - 16,384 entry real-time blocklist capacity
 - Anyone who taps a **valid registered key** can authorize the address they're on. Keep keys
   physically secure.
