@@ -580,7 +580,7 @@ bool webauthn_register_finish(const char* body, size_t bodyLen) {
         return false;
     }
 
-    // S2: reject keys that are not valid P-256 points before persisting them. An
+    // Reject keys that are not valid P-256 points before persisting them. An
     // off-curve or identity-element key would otherwise make the assertion's
     // signature forgeable without any private key.
     if (!crypto_p256_pubkey_valid(x, y)) {

@@ -190,7 +190,7 @@ done:
 bool crypto_verify_es256(const uint8_t pubX[32], const uint8_t pubY[32],
                          const uint8_t* msg, size_t mLen,
                          const uint8_t* derSig, size_t sigLen) {
-    // S2: reject a public key that is not a valid P-256 point before any
+    // Reject a public key that is not a valid P-256 point before any
     // signature work. Enrollment also validates, but a credential stored by a
     // pre-fix firmware (or restored from a backup) still reaches this path.
     if (!crypto_p256_pubkey_valid(pubX, pubY)) return false;

@@ -295,7 +295,7 @@ static void print_credentials() {
 }
 
 // ---------------------------------------------------------------------------
-// selftest: exercise the S2 fix (P-256 point validation) and the ES256 path.
+// selftest: exercise the P-256 point validation and the ES256 path.
 // ---------------------------------------------------------------------------
 
 // mbedTLS RNG callback, backed by the ESP32 hardware RNG (via crypto_random).
@@ -348,7 +348,7 @@ bool run_selftest() {
     if (crypto_p256_pubkey_valid(pm1, zero)) ++failures;
     if (crypto_p256_pubkey_valid(one, one)) ++failures;
 
-    // S2 regression: a degenerate key must fail verification regardless of the
+    // Regression: a degenerate key must fail verification regardless of the
     // signature (the guard runs before any signature parsing).
     {
         static const uint8_t msg[] = "PoE-Passkey selftest";
@@ -404,6 +404,9 @@ bool run_selftest() {
         mbedtls_mpi_free(&s);
         if (!ok) ++failures;
     }
+
+    // The L2 frame classifier (EthGate.cpp).
+    if (!eth_gate_selftest()) ++failures;
 
     if (failures == 0) {
         Log.println("[selftest] elliptic curve test: PASS");
@@ -479,9 +482,14 @@ void serial_console_poll() {
         // the per-window budget).
         if (eth_gate_active()) {
             uint32_t frames = 0, charged = 0, refused = 0;
-            eth_gate_stats(&frames, &charged, &refused);
-            Log.printf("L2 gate:        active, %u frames seen, %u SYNs charged, %u SYNs refused\n",
+            uint32_t v6 = 0, frags = 0, bad = 0;
+            eth_gate_stats(&frames, &charged, &refused, &v6, &frags, &bad);
+            Log.printf("L2 gate:        active, %u frames seen, %u SYNs charged, "
+                       "%u SYNs refused (blocked/over-budget)\n",
                           (unsigned)frames, (unsigned)charged, (unsigned)refused);
+            Log.printf("                refused at L2: %u IPv6, %u IP fragment(s), "
+                       "%u unsupported/malformed\n",
+                          (unsigned)v6, (unsigned)frags, (unsigned)bad);
         } else {
             Log.println("L2 gate:        inactive (request-level gate only)");
         }

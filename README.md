@@ -57,6 +57,7 @@ Everything you customize is at the top of `Config.h`. The important ones:
 | `kConsumerSecret` | Secret the consuming system must send | `CHANGE_ME` - change it |
 | `kAuthorizedIPTtlMs` | How long an address stays authorized | 10 hours |
 | `kSessionTtlMs` | How long a sign-in prompt stays valid | 1 minute |
+| `kFailuresBeforeBlock` / `kFailureWindowMs` | Failed sign-ins before an IP is blocked (they must fall within the window) | 3 / 5 min |
 
 **Set a real `kConsumerSecret`.** Choose something long and random and treat it like a password.
 
@@ -282,7 +283,11 @@ From the serial console: `unblock <ip>` (or `clear-blocks`). Consider whether `k
 ## Notes and Limitations
 
 - Support for 256 registered keys, 256 active authenticated IP addresses
-- IPv4 only; IPv6 traffic is dropped at L2
+- IPv4 only. The L2 gate is default-deny: only ARP, 802.3 MAC Control (pause) and unfragmented
+  IPv4 pass. IPv6, IP fragments (any protocol), EAPOL, LLDP, VLAN-tagged and all unrecognized
+  frames are dropped before the stack - the device never reassembles IP. Legitimate TCP never
+  fragments, so only oversized diagnostic pings are affected. Set `kEthL2GateEnable = false`
+  to fall back to request-level enforcement only
 - 16,384 entry real-time blocklist capacity
 - Anyone who taps a **valid registered key** can authorize the address they're on. Keep keys
   physically secure.

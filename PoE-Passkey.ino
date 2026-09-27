@@ -1358,7 +1358,7 @@ void server_socket_report() {
     }
 
     uint32_t charged = 0;
-    eth_gate_stats(nullptr, &charged, nullptr);
+    eth_gate_stats(nullptr, &charged, nullptr, nullptr, nullptr, nullptr);
     const uint32_t opened = frontdoor_connections_opened();
     const uint32_t closed = frontdoor_connections_closed();
     const uint32_t inFlight = opened - closed;   // unsigned: opened >= closed always

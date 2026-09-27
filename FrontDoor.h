@@ -49,7 +49,7 @@ bool frontdoor_ready();
 bool frontdoor_throttle_over(uint32_t ip);
 
 // Hard-block `ip` and log why (`why` may be null). No timeout - stays blocked until
-// unblocked/cleared. `ip == 0` is ignored.
+// unblocked/cleared. `ip == 0` is ignored. At capacity the oldest entry is evicted (logged).
 void frontdoor_block_ip_reason(uint32_t ip, const char* why);
 
 // Hard-block an IP.
@@ -67,7 +67,8 @@ uint16_t frontdoor_blocklist_count();
 // Copy up to `cap` blocked IPs (network byte order) into `out`. Order is arbitrary.
 uint16_t frontdoor_blocklist_snapshot(uint32_t* out, uint16_t cap);
 
-// Record one failed auth attempt; blocks the IP after kFailuresBeforeBlock.
+// Record one failed auth attempt; blocks after kFailuresBeforeBlock failures within
+// kFailureWindowMs. Idle streaks expire; when full, the oldest streak is evicted.
 void frontdoor_record_failure(uint32_t ip);
 // Clear the failure streak for `ip` (called on a successful authentication).
 void frontdoor_clear_failures(uint32_t ip);

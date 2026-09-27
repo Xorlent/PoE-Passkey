@@ -196,18 +196,21 @@ static void blocklist_erase_at_locked(uint16_t idx) {
     --s_blocklistCount;
 }
 
-// Free one slot at capacity; the cursor spreads victims around the table.
+// Free one slot at capacity; the cursor spreads victims around the table. Returns the
+// evicted address (0 if none).
 // LOCKED: caller holds s_gateLock.
-static void blocklist_evict_one_locked() {
+static uint32_t blocklist_evict_one_locked() {
     const uint16_t mask = (uint16_t)(kBlocklistSlots - 1);
     for (uint16_t n = 0; n < kBlocklistSlots; ++n) {
         s_blocklistCursor = (uint16_t)((s_blocklistCursor + 1) & mask);
         if (s_blocklist[s_blocklistCursor] != 0) {
+            const uint32_t evicted = s_blocklist[s_blocklistCursor];
             blocklist_erase_at_locked(s_blocklistCursor);
-            return;
+            return evicted;
         }
     }
     // Unreachable: this is only called with s_blocklistCount >= 1.
+    return 0;
 }
 
 // Public query; fails closed (reports "blocked" while uninitialized).
@@ -226,17 +229,19 @@ bool frontdoor_ready() {
     return ready;
 }
 
-// Insert `ip` (ignoring duplicates, evicting at capacity).
+// Insert `ip` (ignoring duplicates, evicting at capacity). Returns the address evicted
+// to make room (0 when nothing was evicted).
 // LOCKED: caller holds s_gateLock.
-static void blocklist_add_locked(uint32_t ip) {
+static uint32_t blocklist_add_locked(uint32_t ip) {
     if (ip == 0) {
-        return; // never a key (see the header note)
+        return 0; // never a key (see the header note)
     }
     if (blocklist_contains_locked(ip)) {
-        return; // already blocked
+        return 0; // already blocked
     }
+    uint32_t evicted = 0;
     if (s_blocklistCount >= kBlocklistMaxEntries) {
-        blocklist_evict_one_locked();
+        evicted = blocklist_evict_one_locked();
     }
     // A free slot is guaranteed (2x capacity, <= 0.5 load), so this probe terminates.
     uint16_t idx = blocklist_slot(ip);
@@ -245,40 +250,74 @@ static void blocklist_add_locked(uint32_t ip) {
     }
     s_blocklist[idx] = ip;
     ++s_blocklistCount;
+    return evicted;
 }
 
 // ---------------------------------------------------------------------------
 // Failure accounting (small RAM map) -> feeds the blocklist
 // ---------------------------------------------------------------------------
 
+// One failing IP's streak: `count` failures, the last at `lastMs` (millis()).
 struct FailureSlot {
     uint32_t ip;
+    uint32_t lastMs;
     uint16_t count;
 };
 
-static FailureSlot s_failures[32];
+static FailureSlot s_failures[kFailureSlots];
 static uint16_t s_failureCount = 0;
 
+// Idle longer than kFailureWindowMs: the streak is dead. Signed compare (millis()
+// wraps every ~49 days), as for sessions in PasskeyStore.
+static bool failure_expired(uint32_t lastMs, uint32_t now) {
+    return (int32_t)(now - lastMs) > (int32_t)kFailureWindowMs;
+}
+
 void frontdoor_record_failure(uint32_t ip) {
+    if (ip == 0) {
+        return; // sentinel: never a peer
+    }
+    const uint32_t now = millis();
     bool block = false;
 
     portENTER_CRITICAL(&s_gateLock);
     bool found = false;
-    for (uint16_t i = 0; i < s_failureCount; ++i) {
+    for (uint16_t i = 0; i < s_failureCount; ) {
+        if (failure_expired(s_failures[i].lastMs, now)) {
+            s_failures[i] = s_failures[--s_failureCount]; // reclaim idle streak
+            continue;
+        }
         if (s_failures[i].ip == ip) {
             found = true;
             ++s_failures[i].count;
+            s_failures[i].lastMs = now;
             if (s_failures[i].count >= kFailuresBeforeBlock) {
                 block = true;
                 s_failures[i] = s_failures[--s_failureCount]; // remove
             }
             break;
         }
+        ++i;
     }
-    if (!found && s_failureCount < 32) {
-        s_failures[s_failureCount].ip = ip;
-        s_failures[s_failureCount].count = 1;
-        ++s_failureCount;
+    if (!found && !block) {
+        if (s_failureCount < kFailureSlots) {
+            s_failures[s_failureCount].ip = ip;
+            s_failures[s_failureCount].lastMs = now;
+            s_failures[s_failureCount].count = 1;
+            ++s_failureCount;
+        } else {
+            // Full of live streaks: evict the one with the oldest last failure, so the
+            // freshest offenders keep their counts.
+            uint16_t victim = 0;
+            for (uint16_t i = 1; i < kFailureSlots; ++i) {
+                if ((int32_t)(s_failures[i].lastMs - s_failures[victim].lastMs) < 0) {
+                    victim = i;
+                }
+            }
+            s_failures[victim].ip = ip;
+            s_failures[victim].lastMs = now;
+            s_failures[victim].count = 1;
+        }
     }
     portEXIT_CRITICAL(&s_gateLock);
 
@@ -400,8 +439,9 @@ void frontdoor_block_ip_reason(uint32_t ip, const char* why) {
         return;
     }
 
+    uint32_t evicted = 0;
     portENTER_CRITICAL(&s_gateLock);
-    blocklist_add_locked(ip);
+    evicted = blocklist_add_locked(ip);
     portEXIT_CRITICAL(&s_gateLock);
 
     // Log outside the critical section.
@@ -410,6 +450,10 @@ void frontdoor_block_ip_reason(uint32_t ip, const char* why) {
         Log.printf("[block] %s: %s\n", a.toString().c_str(), why);
     } else {
         Log.printf("[block] %s\n", a.toString().c_str());
+    }
+    if (evicted != 0) {
+        IPAddress e(evicted);
+        Log.printf("[block] blocklist full: evicted the oldest entry %s\n", e.toString().c_str());
     }
 }
 

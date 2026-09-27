@@ -67,6 +67,14 @@ bool validateConfiguration() {
         fail("kBlocklistMaxEntries must be > 0.");
     }
 
+    // ---- Failure streaks ----
+    if (kFailureSlots == 0) {
+        fail("kFailureSlots must be > 0.");
+    }
+    if (kFailureWindowMs == 0) {
+        fail("kFailureWindowMs must be > 0.");
+    }
+
     // ---- TTLs ----
     if (kSessionTtlMs == 0) {
         fail("kSessionTtlMs must be > 0.");

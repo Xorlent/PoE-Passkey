@@ -89,8 +89,12 @@ static const uint16_t kThrottleRingSize = 64;
 // Max blocked IPs (16384 is the practical limit).
 static const uint16_t kBlocklistMaxEntries = 16384;
 
-// Number of failed authentication attempts before an IP is blocked.
+// Number of failed authentication attempts before an IP is blocked. Failures more
+// than kFailureWindowMs apart do not accumulate (a success resets the streak).
 static const uint16_t kFailuresBeforeBlock = 3;
+
+// Failure streak expiry (ms).
+static const uint32_t kFailureWindowMs = 300000;
 
 // Block any non-admin IP that touches an admin route (GET /admin, /register/*, /admin/*)
 static const bool kBlockNonAdminIPOnAdminRoute = true;
@@ -146,6 +150,9 @@ static const uint16_t kMaxSessionsPerIP = 1;
 
 // Max concurrent "authorized IP" entries. Ideally, match the value of kMaxCredentials.
 static const uint16_t kMaxAuthorizedIPs = 256;
+
+// Concurrent authentication failure streaks tracked (IP addresses).
+static const uint16_t kFailureSlots = 256;
 
 ////////// Calculated counts (do not edit) //////////
 
