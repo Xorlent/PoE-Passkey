@@ -295,15 +295,12 @@ so it can't open the admin console to the public internet.
 
 ## Notes and Limitations
 
-- Support for 256 registered keys, 256 active authenticated IP addresses
+- Supports 256 registered keys and 256 active authenticated IP addresses
 - IPv4 only. The L2 gate is default-deny: only ARP, 802.3 MAC Control (pause) and unfragmented
   IPv4 pass. IPv6, IP fragments (any protocol), EAPOL, LLDP, VLAN-tagged and all unrecognized
   frames are dropped before the stack - the device never reassembles IP. Legitimate TCP never
   fragments, so only oversized diagnostic pings are affected. Set `kEthL2GateEnable = false`
   to fall back to request-level enforcement only
 - 16,384 entry real-time blocklist capacity
-- Anyone who taps a **valid registered key** can authorize the address they're on. Keep keys
-  physically secure.
-- Enrollment is gated only by the admin's **source IP** (`kAdminIPs` in Config.h) - anyone on that trusted
-  network can register a key. Keep that network trusted.
-- Authorized addresses expire on their own - the TTL (`kAuthorizedIPTtlMs` in Config.h) is your main safety margin.
+- Enrollment is gated only by the admin's **source IP** (`kAdminIPs` in Config.h)
+- Authorized addresses expire on their own based on the  `kAuthorizedIPTtlMs` TTL value configured in Config.h
