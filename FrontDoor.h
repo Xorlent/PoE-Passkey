@@ -16,7 +16,19 @@
 #define FRONTDOOR_H
 
 #include <stdint.h>
+#include <stddef.h>
+#include <stdio.h>
 #include <esp_http_server.h>
+
+// Render an IPv4 address (the project's uint32_t form: the low byte is the first octet;
+// see Acl.cpp and EthGate.cpp) into `out` without allocating. IPAddress::toString()
+// heap-allocates an Arduino String; that fragments the heap when done per request,
+// connection, or refusal (several of which are hot paths). Prefer this there.
+static inline void ipv4_to_string(uint32_t ip, char* out, size_t cap) {
+    snprintf(out, cap, "%u.%u.%u.%u",
+             (unsigned)(ip & 0xFFu), (unsigned)((ip >> 8) & 0xFFu),
+             (unsigned)((ip >> 16) & 0xFFu), (unsigned)((ip >> 24) & 0xFFu));
+}
 
 // Verdict of frontdoor_gate_syn().
 enum FrontDoorSynVerdict {

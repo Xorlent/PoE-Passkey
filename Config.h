@@ -16,7 +16,7 @@
 ////////------------------------------------------- CONFIGURATION SETTINGS AREA -------------------------------------------////////
 
 // Log one line per admitted request (refusals are always logged).
-static const bool kLogHttpRequests = true;
+static constexpr bool kLogHttpRequests = true;
 
 ////////// Network configuration //////////
 
@@ -38,17 +38,17 @@ static const IPAddress dns2(149, 112, 112, 112);  // Secondary DNS
 
 // RP ID: the domain credentials are bound to. Must be a real domain that
 // resolves to this device (browsers reject IPs and mDNS names).
-static const char* kRpId = "passkey.vuln.plc.local";
+static constexpr const char* const kRpId = "passkey.vuln.plc.local";
 
 // Origin: "https://" + a host equal to kRpId (or a subdomain of it).
-static const char* kOrigin = "https://passkey.vuln.plc.local";
+static constexpr const char* const kOrigin = "https://passkey.vuln.plc.local";
 
 ////////// Clock (NTP) //////////
 const IPAddress ntpSvr(192, 168, 1, 5);       // Set internal NTP server IP address.
 //const char* const ntpSvr = "pool.ntp.org";  // Or set a NTP DNS server hostname.
 
 // The oldest epoch accepted as "the time is set"
-static const uint32_t kClockMinValidEpoch = 1789000000u;
+static constexpr uint32_t kClockMinValidEpoch = 1789000000u;
 
 ////////// Admin internal IP allowlist //////////
 
@@ -60,75 +60,75 @@ static const IPAddress kAdminIPs[] = {
 };
 
 // Maximum addresses per editable allowlist (8 admin + 8 consumer).
-static const uint16_t kAllowlistMaxEntries = 8;
+static constexpr uint16_t kAllowlistMaxEntries = 8;
 
 // Allow the admin console to add/remove allowlist entries at runtime. Set to false to
 // freeze both lists at their persisted (or seed) values - a compile-time-only lock.
-static const bool kRuntimeAllowlistEdits = true;
+static constexpr bool kRuntimeAllowlistEdits = true;
 
 // When adding to the ADMIN allowlist at runtime, accept only non-public IPv4
 // (RFC 1918 10/8, 172.16/12, 192.168/16, plus 127/8 loopback and 169.254/16 link-local).
 // Set to false to allow any address.
-static const bool kAdminIPsNonPublicOnly = true;
+static constexpr bool kAdminIPsNonPublicOnly = true;
 
 ////////// Security gate: rate limiting (per-IP throttle, circular RAM ring) //////////
 
 // Time window (milliseconds) over which connection attempts are counted.
-static const uint32_t kThrottleWindowMs = 1000;
+static constexpr uint32_t kThrottleWindowMs = 1000;
 
 // Connection charges per IP per window (one per TCP connection). Due to browser
 // behavior, do not reduce below 5; excess SYNs are dropped until the window
 // rolls over (or 429s, if the L2 gate is off).
-static const uint16_t kMaxConnPerWindowPerIP = 5;
+static constexpr uint16_t kMaxConnPerWindowPerIP = 5;
 
 // Number of slots in the circular throttle ring (RAM).
-static const uint16_t kThrottleRingSize = 64;
+static constexpr uint16_t kThrottleRingSize = 64;
 
 ////////// Security gate: blocklist (PSRAM) //////////
 
 // Max blocked IPs (16384 is the practical limit).
-static const uint16_t kBlocklistMaxEntries = 16384;
+static constexpr uint16_t kBlocklistMaxEntries = 16384;
 
 // Number of failed authentication attempts before an IP is blocked. Failures more
 // than kFailureWindowMs apart do not accumulate (a success resets the streak).
 // If kAuthorizedReferrerURIHost is also configured, invalid referer hosts will count
 // towards this accumulator.
-static const uint16_t kFailuresBeforeBlock = 3;
+static constexpr uint16_t kFailuresBeforeBlock = 3;
 
 // Failure streak expiry (ms).
-static const uint32_t kFailureWindowMs = 300000;
+static constexpr uint32_t kFailureWindowMs = 300000;
 
 // Block any non-admin IP that touches an admin route (GET /admin, /register/*, /admin/*)
-static const bool kBlockNonAdminIPOnAdminRoute = true;
+static constexpr bool kBlockNonAdminIPOnAdminRoute = true;
 
 // Block any non-admin, non-consumer IP that requests a route that does not exist -
 // a scanner probe (/wp-login.php, /admin.cgi, ...). Mirrors the allowlist guard in
 // handler_not_found().
-static const bool kBlockScanners = true;
+static constexpr bool kBlockScanners = true;
 
 ////////// Security gate: Referer enforcement (root / route only) //////////
 
 // FQDN of the server that redirects clients to the authentication URL. The root "/" route
 // compares each request's Referer host against this value. "NotEnforced" disables the check.
-static const char* kAuthorizedReferrerURIHost = "NotEnforced";
+static constexpr const char* const kAuthorizedReferrerURIHost = "NotEnforced";
 
 ////////// Security gate: Ethernet-driver (L2) drop //////////
 
 // Drop over-budget / blocked SYNs in the Ethernet RX path before TLS (EthGate.h).
-static const bool kEthL2GateEnable = true;
+static constexpr bool kEthL2GateEnable = true;
 
 ////////// Session + TTL //////////
 
 // One-time challenge validity (ms). Matches the browser's 60 s ceremony timeout.
-static const uint32_t kSessionTtlMs = 60000;
+static constexpr uint32_t kSessionTtlMs = 60000;
 
 // How long a successful authentication keeps its egress IP "authorized" (ms).
-static const uint32_t kAuthorizedIPTtlMs = 36000000;
+static constexpr uint32_t kAuthorizedIPTtlMs = 36000000;
 
 ////////// Consumer endpoint (/authorized-ips) //////////
 
 // Shared secret for ?key=... on the consumer endpoint. Change before deploying (120 character maximum).
-static const char* kConsumerSecret = "CHANGE_ME";
+static constexpr const char* const kConsumerSecret = "CHANGE_ME";
 
 // Source IPs permitted to read the authorized-IP list. Seed for the runtime-editable
 // consumer allowlist (see Acl.h), mirroring the admin seed above.
@@ -139,32 +139,32 @@ static const IPAddress kConsumerAllowlist[] = {
 ////////--------------------------------------- END OF CONFIGURATION SETTINGS ---------------------------------------////////
 
 // Max POST body bytes accepted (fail closed).
-static const uint16_t kMaxBodySize = 4096;
+static constexpr uint16_t kMaxBodySize = 4096;
 
 ////////// Store capacity //////////
 
 // Max registered hardware keys (one NVS blob each). Do not increase beyond 256.
-static const uint16_t kMaxCredentials = 256;
+static constexpr uint16_t kMaxCredentials = 256;
 
 // Max in-flight client authentication ceremonies.
-static const uint16_t kMaxSessions = 32;
+static constexpr uint16_t kMaxSessions = 32;
 
 // Max in-flight registration ceremonies (admin key registrations).
-static const uint16_t kMaxRegistrations = 4;
+static constexpr uint16_t kMaxRegistrations = 4;
 
 // Max in-flight auth ceremonies per source IP. /auth/start is public, so this caps one
 // client from holding every slot; over the cap, a peer takes back its own oldest slot.
-static const uint16_t kMaxSessionsPerIP = 1;
+static constexpr uint16_t kMaxSessionsPerIP = 1;
 
 // Max concurrent "authorized IP" entries. Ideally, match the value of kMaxCredentials.
-static const uint16_t kMaxAuthorizedIPs = 256;
+static constexpr uint16_t kMaxAuthorizedIPs = 256;
 
 // Concurrent authentication failure streaks tracked (IP addresses).
-static const uint16_t kFailureSlots = 256;
+static constexpr uint16_t kFailureSlots = 256;
 
 ////////// Calculated counts (do not edit) //////////
 
-static const uint32_t kAdminIPCount            = sizeof(kAdminIPs) / sizeof(kAdminIPs[0]);
-static const uint32_t kConsumerAllowlistCount  = sizeof(kConsumerAllowlist) / sizeof(kConsumerAllowlist[0]);
+static constexpr uint32_t kAdminIPCount = sizeof(kAdminIPs) / sizeof(kAdminIPs[0]);
+static constexpr uint32_t kConsumerAllowlistCount = sizeof(kConsumerAllowlist) / sizeof(kConsumerAllowlist[0]);
 
 #endif // CONFIG_H

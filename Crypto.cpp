@@ -150,19 +150,22 @@ static bool der_sig_to_rs(const uint8_t* der, size_t len, uint8_t r[32], uint8_t
     return pos == len; // no trailing bytes
 }
 
-// Is (x, y) a valid P-256 public key? Rejects the identity element, zero
-// coordinates, out-of-range values, and off-curve points. mbedtls_ecp_point_read_binary()
-// does NOT check curve membership (documented in ecp.h), and mbedtls_ecdsa_verify()
-// does not either, so this must run before a key is stored or a signature accepted.
-bool crypto_p256_pubkey_valid(const uint8_t x[32], const uint8_t y[32]) {
-    // Fast, reviewable reject of the identity element: (0,0) is off-curve because
-    // P-256's curve constant b != 0. Short-circuits before any MPI work.
+// Reject zero/identity coordinates (off-curve on P-256) before any MPI work.
+static bool pubkey_coords_nonzero(const uint8_t x[32], const uint8_t y[32]) {
     bool anyX = false, anyY = false;
     for (size_t i = 0; i < 32; ++i) {
         anyX = anyX || (x[i] != 0);
         anyY = anyY || (y[i] != 0);
     }
-    if (!anyX || !anyY) return false;
+    return anyX && anyY;
+}
+
+// Is (x, y) a valid P-256 public key? Rejects the identity element, zero
+// coordinates, out-of-range values, and off-curve points. mbedtls_ecp_point_read_binary()
+// does NOT check curve membership (documented in ecp.h), and mbedtls_ecdsa_verify()
+// does not either, so this must run before a key is stored or a signature accepted.
+bool crypto_p256_pubkey_valid(const uint8_t x[32], const uint8_t y[32]) {
+    if (!pubkey_coords_nonzero(x, y)) return false;
 
     mbedtls_ecp_group grp;
     mbedtls_ecp_point Q;
@@ -190,10 +193,9 @@ done:
 bool crypto_verify_es256(const uint8_t pubX[32], const uint8_t pubY[32],
                          const uint8_t* msg, size_t mLen,
                          const uint8_t* derSig, size_t sigLen) {
-    // Reject a public key that is not a valid P-256 point before any
-    // signature work. Enrollment also validates, but a credential stored by a
-    // pre-fix firmware (or restored from a backup) still reaches this path.
-    if (!crypto_p256_pubkey_valid(pubX, pubY)) return false;
+    // Same validity checks as crypto_p256_pubkey_valid() (zero-coordinate reject +
+    // check_pubkey curve membership), but the group/point are loaded once and reused here.
+    if (!pubkey_coords_nonzero(pubX, pubY)) return false;
 
     uint8_t hash[32];
     crypto_sha256(msg, mLen, hash);
@@ -214,8 +216,6 @@ bool crypto_verify_es256(const uint8_t pubX[32], const uint8_t pubY[32],
 
     bool ok = false;
 
-    if (mbedtls_mpi_read_binary(&mr, r, 32) != 0) goto done;
-    if (mbedtls_mpi_read_binary(&ms, s, 32) != 0) goto done;
     if (mbedtls_ecp_group_load(&grp, MBEDTLS_ECP_DP_SECP256R1) != 0) goto done;
 
     // Public point, uncompressed: 0x04 || x || y.
@@ -223,6 +223,10 @@ bool crypto_verify_es256(const uint8_t pubX[32], const uint8_t pubY[32],
     memcpy(point + 1, pubX, 32);
     memcpy(point + 33, pubY, 32);
     if (mbedtls_ecp_point_read_binary(&grp, &Q, point, sizeof(point)) != 0) goto done;
+    if (mbedtls_ecp_check_pubkey(&grp, &Q) != 0) goto done;
+
+    if (mbedtls_mpi_read_binary(&mr, r, 32) != 0) goto done;
+    if (mbedtls_mpi_read_binary(&ms, s, 32) != 0) goto done;
 
     // 0 == signature valid.
     if (mbedtls_ecdsa_verify(&grp, hash, sizeof(hash), &Q, &mr, &ms) != 0) goto done;

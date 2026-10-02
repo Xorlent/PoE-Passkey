@@ -445,15 +445,17 @@ void frontdoor_block_ip_reason(uint32_t ip, const char* why) {
     portEXIT_CRITICAL(&s_gateLock);
 
     // Log outside the critical section.
-    IPAddress a(ip);
+    char ipBuf[16];
+    ipv4_to_string(ip, ipBuf, sizeof(ipBuf));
     if (why) {
-        Log.printf("[block] %s: %s\n", a.toString().c_str(), why);
+        Log.printf("[block] %s: %s\n", ipBuf, why);
     } else {
-        Log.printf("[block] %s\n", a.toString().c_str());
+        Log.printf("[block] %s\n", ipBuf);
     }
     if (evicted != 0) {
-        IPAddress e(evicted);
-        Log.printf("[block] blocklist full: evicted the oldest entry %s\n", e.toString().c_str());
+        char evBuf[16];
+        ipv4_to_string(evicted, evBuf, sizeof(evBuf));
+        Log.printf("[block] blocklist full: evicted the oldest entry %s\n", evBuf);
     }
 }
 
@@ -474,8 +476,9 @@ bool frontdoor_unblock_ip(uint32_t ip) {
     portEXIT_CRITICAL(&s_gateLock);
 
     if (removed) {
-        IPAddress a(ip);
-        Log.printf("[block] unblocked %s\n", a.toString().c_str());
+        char ipBuf[16];
+        ipv4_to_string(ip, ipBuf, sizeof(ipBuf));
+        Log.printf("[block] unblocked %s\n", ipBuf);
     }
     return removed;
 }
@@ -641,9 +644,10 @@ bool frontdoor_admit_request_ex(httpd_req_t* req, bool allowCrossSite) {
         if (ip == 0) {
             Log.println("[gate] refused a cross-site request from an unidentified peer");
         } else {
-            IPAddress a(ip);
+            char ipBuf[16];
+            ipv4_to_string(ip, ipBuf, sizeof(ipBuf));
             Log.printf("[gate] refused a cross-site request from %s (not blocked: a browser "
-                          "acted for another origin)\n", a.toString().c_str());
+                          "acted for another origin)\n", ipBuf);
         }
     } else if (req->method == HTTP_POST && !request_is_json(req)) {
         status = "415 Unsupported Media Type";
@@ -651,8 +655,9 @@ bool frontdoor_admit_request_ex(httpd_req_t* req, bool allowCrossSite) {
         if (ip == 0) {
             Log.println("[gate] refused a non-JSON POST from an unidentified peer");
         } else {
-            IPAddress a(ip);
-            Log.printf("[gate] refused a non-JSON POST from %s\n", a.toString().c_str());
+            char ipBuf[16];
+            ipv4_to_string(ip, ipBuf, sizeof(ipBuf));
+            Log.printf("[gate] refused a non-JSON POST from %s\n", ipBuf);
         }
     } else if (ip == 0) {
         status = "403 Forbidden";
@@ -661,14 +666,16 @@ bool frontdoor_admit_request_ex(httpd_req_t* req, bool allowCrossSite) {
     } else if (frontdoor_blocked(ip)) {
         status = "403 Forbidden";
         body = "{\"error\":\"forbidden\"}";
-        IPAddress a(ip);
-        Log.printf("[gate] refused a request from blocklisted IP %s\n", a.toString().c_str());
+        char ipBuf[16];
+        ipv4_to_string(ip, ipBuf, sizeof(ipBuf));
+        Log.printf("[gate] refused a request from blocklisted IP %s\n", ipBuf);
     } else if (frontdoor_throttle_over(ip)) {
         status = "429 Too Many Requests";
         body = "{\"error\":\"rate_limited\"}";
-        IPAddress a(ip);
+        char ipBuf[16];
+        ipv4_to_string(ip, ipBuf, sizeof(ipBuf));
         Log.printf("[gate] refused a request from %s (over the connection budget)\n",
-                      a.toString().c_str());
+                      ipBuf);
     } else {
         return true;
     }
@@ -708,14 +715,15 @@ esp_err_t frontdoor_on_open(httpd_handle_t hd, int sockfd) {
         return ESP_FAIL;
     }
 
-    IPAddress a(ip);
+    char ipBuf[16];
+    ipv4_to_string(ip, ipBuf, sizeof(ipBuf));
     if (!frontdoor_admit(ip)) {
         Log.printf("[gate] connection from %s is blocklisted or over budget; its requests will be refused\n",
-                      a.toString().c_str());
+                      ipBuf);
         return ESP_FAIL;
     }
 
-    ESP_LOGD(TAG, "Accepted connection from %s", a.toString().c_str());
+    ESP_LOGD(TAG, "Accepted connection from %s", ipBuf);
     return ESP_OK;
 }
 

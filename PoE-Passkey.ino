@@ -192,13 +192,15 @@ static void print_uri_masked(const char* uri) {
 // cost received frames.
 static void log_request(httpd_req_t* req) {
     if (!kLogHttpRequests) return;
-    IPAddress ip(req_client_ip(req));
+    const uint32_t ip = req_client_ip(req);
     // req->method is an int in this IDF's httpd_req, so the cast is required (it was
     // never checked before: the previous ESP_LOGI call was compiled out, which is how
     // this hid).
     Log.printf("[req] %s ", method_name((httpd_method_t)req->method));
     print_uri_masked(req->uri);
-    Log.printf(" from %s\n", ip.toString().c_str());
+    char ipBuf[16];
+    ipv4_to_string(ip, ipBuf, sizeof(ipBuf));
+    Log.printf(" from %s\n", ipBuf);
 }
 
 // Page render buffer, allocated once at boot (PSRAM, internal RAM fallback). Size is the
@@ -348,9 +350,9 @@ static esp_err_t send_page(httpd_req_t* req, const char* tpl, const char* ipStr)
 // every admin route calls.
 static esp_err_t admin_denied(httpd_req_t* req, const char* what) {
     const uint32_t peer = req_client_ip(req);
-    IPAddress ip(peer);
-    const String ipStr = ip.toString();
-    Log.printf("[admin] %s refused: %s is not in kAdminIPs (Config.h)\n", what, ipStr.c_str());
+    char ipStr[16];
+    ipv4_to_string(peer, ipStr, sizeof(ipStr));
+    Log.printf("[admin] %s refused: %s is not in kAdminIPs (Config.h)\n", what, ipStr);
 
     if (kBlockNonAdminIPOnAdminRoute) {
         if (peer == 0) {
@@ -358,11 +360,11 @@ static esp_err_t admin_denied(httpd_req_t* req, const char* what) {
         } else if (acl_is_admin(peer) ||
                    acl_is_consumer(peer)) {
             // Guard: never block a host in either allowlist.
-            Log.printf("[admin] not blocking %s: it is in a configured allowlist\n", ipStr.c_str());
+            Log.printf("[admin] not blocking %s: it is in a configured allowlist\n", ipStr);
         } else {
             frontdoor_block_ip_reason(peer, "admin route request from a non-admin source IP");
             Log.printf("[admin] recover that host with the serial console: 'unblock %s' or 'clear-blocks'\n",
-                          ipStr.c_str());
+                          ipStr);
         }
     }
 
@@ -477,21 +479,21 @@ static esp_err_t handler_root(httpd_req_t* req) {
     log_request(req);
 
     const uint32_t peer = req_client_ip(req);
-    IPAddress ip(peer);
     // No admin flag is computed here: nothing in this page depends on the caller being
     // an admin any more (see the handler note above and kIndexHtml).
-    const String ipStr = ip.toString();
+    char ipStr[16];
+    ipv4_to_string(peer, ipStr, sizeof(ipStr));
 
     // Referrer gate: when kAuthorizedReferrerURIHost is a valid FQDN, the Referer host must
     // match it. A mismatch drops the request and counts a failure toward kFailuresBeforeBlock.
     if (referrer_gate_armed() && !referrer_host_matches(req)) {
-        return referrer_denied(req, peer, ipStr.c_str());
+        return referrer_denied(req, peer, ipStr);
     }
 
     // send_page() renders the template with a fresh CSP nonce and sends the matching policy
     // header - see its comment for why the nonce, the body and the header all live in that
     // one frame.
-    return send_page(req, kIndexHtml, ipStr.c_str());
+    return send_page(req, kIndexHtml, ipStr);
 }
 
 // GET /favicon.ico - empty 200 (the page declares an empty data: icon, so this is rarely
@@ -520,13 +522,13 @@ static esp_err_t handler_admin_page(httpd_req_t* req) {
         return admin_denied(req, "GET /admin");
     }
 
-    IPAddress ip(peer);
-    const String ipStr = ip.toString();
+    char ipStr[16];
+    ipv4_to_string(peer, ipStr, sizeof(ipStr));
 
     // send_page() renders the template with a fresh CSP nonce and sends the matching policy
     // header. Nothing here is reusable by another caller (it embeds the peer address), which
     // send_page() marks with Cache-Control: no-store.
-    return send_page(req, kAdminHtml, ipStr.c_str());
+    return send_page(req, kAdminHtml, ipStr);
 }
 
 // GET /whoami - the caller's IP (polled by the page to spot an address change).
@@ -536,9 +538,10 @@ static esp_err_t handler_whoami(httpd_req_t* req) {
     }
     log_request(req);
 
-    IPAddress ip(req_client_ip(req));
+    char ipBuf[16];
+    ipv4_to_string(req_client_ip(req), ipBuf, sizeof(ipBuf));
     char buf[64];
-    snprintf(buf, sizeof(buf), "{\"ip\":\"%s\"}", ip.toString().c_str());
+    snprintf(buf, sizeof(buf), "{\"ip\":\"%s\"}", ipBuf);
     httpd_resp_set_type(req, "application/json");
     // Polled by the page to notice that the caller's address changed; a cached
     // copy would hide exactly that.
@@ -757,10 +760,12 @@ static esp_err_t handler_authorized_ips(httpd_req_t* req) {
     }
     log_request(req);
 
-    IPAddress ip(req_client_ip(req));
-    if (!acl_is_consumer((uint32_t)ip)) {
+    const uint32_t peer = req_client_ip(req);
+    char ipBuf[16];
+    ipv4_to_string(peer, ipBuf, sizeof(ipBuf));
+    if (!acl_is_consumer(peer)) {
         Log.printf("[consumer] GET /authorized-ips refused: %s is not in kConsumerAllowlist (Config.h)\n",
-                      ip.toString().c_str());
+                      ipBuf);
         return send_json_status(req, "403 Forbidden", "{\"error\":\"not_consumer_ip\"}");
     }
 
@@ -769,7 +774,7 @@ static esp_err_t handler_authorized_ips(httpd_req_t* req) {
         // Name the shape the caller has to send: this is a misconfigured consumer, and
         // "key_required" alone does not say whether the key was missing or malformed.
         Log.printf("[consumer] GET /authorized-ips refused: no query string (expected ?key=<secret>) from %s\n",
-                      ip.toString().c_str());
+                      ipBuf);
         return send_json_status(req, "403 Forbidden", "{\"error\":\"key_required\"}");
     }
     char key[128];
@@ -778,7 +783,7 @@ static esp_err_t handler_authorized_ips(httpd_req_t* req) {
         // print_untrusted_text) so it cannot inject terminal escapes into the console.
         Log.printf("[consumer] GET /authorized-ips refused: query '");
         safe_print(query, 64);
-        Log.printf("' has no key= parameter from %s\n", ip.toString().c_str());
+        Log.printf("' has no key= parameter from %s\n", ipBuf);
         return send_json_status(req, "403 Forbidden", "{\"error\":\"key_required\"}");
     }
     if (!crypto_const_eq_str(key, strlen(key), kConsumerSecret, strlen(kConsumerSecret))) {
@@ -787,7 +792,7 @@ static esp_err_t handler_authorized_ips(httpd_req_t* req) {
         Log.print("[consumer] GET /authorized-ips refused: bad ?key= value '");
         safe_print(key, 64);
         Log.printf("' (%u bytes, supplied) from %s\n",
-                      (unsigned)strlen(key), ip.toString().c_str());
+                      (unsigned)strlen(key), ipBuf);
         return send_json_status(req, "403 Forbidden", "{\"error\":\"bad_key\"}");
     }
 
@@ -806,10 +811,8 @@ static esp_err_t handler_authorized_ips(httpd_req_t* req) {
     size_t n = authzips_collect(ips, kMaxAuthorizedIPs);
     size_t off = 0;
     for (size_t i = 0; i < n; ++i) {
-        IPAddress a(ips[i]);
-        // Copy into a local buffer: a.toString().c_str() dangles once its temporary String ends.
         char ipText[16]; // an IPv4 literal is at most "255.255.255.255" + NUL
-        a.toString().toCharArray(ipText, sizeof(ipText));
+        ipv4_to_string(ips[i], ipText, sizeof(ipText));
         const size_t l = strlen(ipText);
         if (off + l + 2 > bufCap) break;
         memcpy(buf + off, ipText, l);
@@ -975,13 +978,15 @@ static esp_err_t handler_admin_acl(httpd_req_t* req) {
     size_t o = (size_t)snprintf(body, sizeof(body), "{\"edits\":%s,\"admin\":[",
                                 kRuntimeAllowlistEdits ? "true" : "false");
     for (size_t i = 0; i < an; ++i) {
-        IPAddress a(admin[i]);
-        o += (size_t)snprintf(body + o, sizeof(body) - o, "%s\"%s\"", i ? "," : "", a.toString().c_str());
+        char ipBuf[16];
+        ipv4_to_string(admin[i], ipBuf, sizeof(ipBuf));
+        o += (size_t)snprintf(body + o, sizeof(body) - o, "%s\"%s\"", i ? "," : "", ipBuf);
     }
     o += (size_t)snprintf(body + o, sizeof(body) - o, "],\"consumer\":[");
     for (size_t i = 0; i < cn; ++i) {
-        IPAddress a(consumer[i]);
-        o += (size_t)snprintf(body + o, sizeof(body) - o, "%s\"%s\"", i ? "," : "", a.toString().c_str());
+        char ipBuf[16];
+        ipv4_to_string(consumer[i], ipBuf, sizeof(ipBuf));
+        o += (size_t)snprintf(body + o, sizeof(body) - o, "%s\"%s\"", i ? "," : "", ipBuf);
     }
     snprintf(body + o, sizeof(body) - o, "]}");
 
@@ -1167,14 +1172,14 @@ static esp_err_t handler_admin_set_credential_disabled(httpd_req_t* req) {
     bool ok = (idLen > 0) && cred_set_disabled(credId, (size_t)idLen, disabled);
     free(body);
 
-    IPAddress from(peer);
-    const String fromStr = from.toString();
+    char fromStr[16];
+    ipv4_to_string(peer, fromStr, sizeof(fromStr));
     if (ok) {
         Log.printf("[admin] %s a credential from %s\n",
-                      disabled ? "DISABLED" : "re-enabled", fromStr.c_str());
+                      disabled ? "DISABLED" : "re-enabled", fromStr);
     } else {
         Log.printf("[admin] set-credential-disabled from %s: no credential matched that id\n",
-                      fromStr.c_str());
+                      fromStr);
     }
     return send_json(req, ok ? "{\"ok\":true}" : "{\"ok\":false}");
 }
@@ -1204,7 +1209,7 @@ static esp_err_t handler_admin_authorized_ips(httpd_req_t* req) {
 
     for (size_t i = 0; !failed && i < n; ++i) {
         char addr[16]; // an IPv4 literal is at most "255.255.255.255" + NUL
-        IPAddress(ips[i]).toString().toCharArray(addr, sizeof(addr));
+        ipv4_to_string(ips[i], addr, sizeof(addr));
 
         char head[64];
         const int hl = snprintf(head, sizeof(head), "%s{\"ip\":\"%s\",\"users\":[",

@@ -505,8 +505,9 @@ void serial_console_poll() {
             const uint16_t shown = frontdoor_blocklist_snapshot(ips, 32);
             Log.printf("Blocked IPs (%u):\n", (unsigned)total);
             for (uint16_t i = 0; i < shown; ++i) {
-                IPAddress a(ips[i]);
-                Log.printf("  %s\n", a.toString().c_str());
+                char ipBuf[16];
+                ipv4_to_string(ips[i], ipBuf, sizeof(ipBuf));
+                Log.printf("  %s\n", ipBuf);
             }
             if (total > shown) {
                 Log.printf("  ... and %u more\n", (unsigned)(total - shown));
@@ -534,8 +535,10 @@ void serial_console_poll() {
         if (!addr.fromString(arg)) {
             Log.println("Usage: reset-admin <ipv4 address>   (must be non-public, e.g. 192.168.1.6)");
         } else if (acl_reset_admin((uint32_t)addr)) {
+            char ipBuf[16];
+            ipv4_to_string((uint32_t)addr, ipBuf, sizeof(ipBuf));
             Log.printf("Admin allowlist reset to %s (persisted; survives reboot).\n",
-                           addr.toString().c_str());
+                           ipBuf);
         } else {
             Log.println("Refused: that address is not non-public (must be 10/8, 172.16/12, "
                            "192.168/16, 127/8, or 169.254/16).");
