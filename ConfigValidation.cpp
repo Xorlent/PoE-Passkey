@@ -15,6 +15,44 @@ static void fail(const char* msg) {
     s_halted = true;
 }
 
+bool fqdn_is_valid(const char* s) {
+    if (!s || !*s) {
+        return false;
+    }
+    const size_t len = strlen(s);
+    if (len > 253) {
+        return false;
+    }
+    bool sawDot = false;
+    size_t label = 0;
+    for (size_t i = 0; i <= len; ++i) {
+        const char c = s[i];
+        if (c == '.' || c == '\0') {
+            if (label == 0 || label > 63) {
+                return false;
+            }
+            if (s[i - 1] == '-') {
+                return false;
+            }
+            if (c == '.') {
+                sawDot = true;
+            }
+            label = 0;
+        } else {
+            const bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                            (c >= '0' && c <= '9') || c == '-';
+            if (!ok) {
+                return false;
+            }
+            if (c == '-' && label == 0) {
+                return false;
+            }
+            ++label;
+        }
+    }
+    return sawDot;
+}
+
 bool validateConfiguration() {
     // ---- WebAuthn identity ----
     if (kRpId == nullptr || kRpId[0] == '\0') {
@@ -96,6 +134,12 @@ bool validateConfiguration() {
         fail("kConsumerAllowlist must contain at least one consumer IP.");
     }
 
+    // ---- Referer gate ----
+    if (strcmp(kAuthorizedReferrerURIHost, "NotEnforced") != 0 &&
+        !fqdn_is_valid(kAuthorizedReferrerURIHost)) {
+        fail("kAuthorizedReferrerURIHost must be either \"NotEnforced\" or a valid FQDN "
+             "(e.g. auth.example.com).");
+    }
     if (s_halted) {
         return false;
     }

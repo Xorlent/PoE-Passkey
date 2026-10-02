@@ -91,6 +91,8 @@ static const uint16_t kBlocklistMaxEntries = 16384;
 
 // Number of failed authentication attempts before an IP is blocked. Failures more
 // than kFailureWindowMs apart do not accumulate (a success resets the streak).
+// If kAuthorizedReferrerURIHost is also configured, invalid referer hosts will count
+// towards this accumulator.
 static const uint16_t kFailuresBeforeBlock = 3;
 
 // Failure streak expiry (ms).
@@ -103,6 +105,12 @@ static const bool kBlockNonAdminIPOnAdminRoute = true;
 // a scanner probe (/wp-login.php, /admin.cgi, ...). Mirrors the allowlist guard in
 // handler_not_found().
 static const bool kBlockScanners = true;
+
+////////// Security gate: Referer enforcement (root / route only) //////////
+
+// FQDN of the server that redirects clients to the authentication URL. The root "/" route
+// compares each request's Referer host against this value. "NotEnforced" disables the check.
+static const char* kAuthorizedReferrerURIHost = "NotEnforced";
 
 ////////// Security gate: Ethernet-driver (L2) drop //////////
 

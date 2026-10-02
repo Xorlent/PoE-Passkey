@@ -656,7 +656,13 @@ for (const [i, t] of TABS.entries()) {
 }
 
 const fromHash = (location.hash || '').replace('#', '').toLowerCase();
-selectTab(fromHash === 'registered' ? 'Creds' : (fromHash === 'ips' ? 'Ips' : (fromHash === 'logs' ? 'Logs' : 'Enroll')), false);
+const initialTab = fromHash === 'registered' ? 'Creds' : (fromHash === 'ips' ? 'Ips' : (fromHash === 'logs' ? 'Logs' : 'Enroll'));
+selectTab(initialTab, false);
+// Fill every tab's title count without waiting for a click. The active tab's data
+// was already requested by selectTab(); load the rest in parallel now.
+if (initialTab !== 'Creds') { loadCreds(); }
+if (initialTab !== 'Ips')   { loadIps(); }
+if (initialTab !== 'Logs')  { loadLogs(); }
 </script>
 </body>
 </html>

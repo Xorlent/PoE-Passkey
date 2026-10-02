@@ -58,6 +58,7 @@ Everything you customize is at the top of `Config.h`. The important ones:
 | `kAuthorizedIPTtlMs` | How long an address stays authorized | 10 hours |
 | `kSessionTtlMs` | How long a sign-in prompt stays valid | 1 minute |
 | `kFailuresBeforeBlock` / `kFailureWindowMs` | Failed sign-ins before an IP is blocked (they must fall within the window) | 3 / 5 min |
+| `kAuthorizedReferrerURIHost` | FQDN whose Referer header the root `/` route requires; a mismatch counts a failure toward `kFailuresBeforeBlock`. `"NotEnforced"` disables the check | `NotEnforced` |
 
 **Set a real `kConsumerSecret`.** Choose something long and random and treat it like a password.
 
@@ -250,6 +251,7 @@ The device has a simple text console over USB (115200 baud):
 | `blocks` | List blocked IP addresses |
 | `unblock <ip>` | Allow one blocked IP again |
 | `clear-blocks` | Allow all blocked IPs again |
+| `reset-admin <ip>` | Replace the admin allowlist with a single non-public IPv4 |
 | `clear-cert` / `clear-key` | Remove the imported TLS material |
 | `reboot` | Restart the device |
 | `help` | List commands |
@@ -277,6 +279,17 @@ It's waiting for the TLS certificate and key. Run `import` and paste both.
 **A legitimate machine was blocked and can't reach the device.**
 From the serial console: `unblock <ip>` (or `clear-blocks`). Consider whether `kAdminIPs` or
 `kConsumerAllowlist` needs updating.
+
+**The admin allowlist no longer matches `kAdminIPs` in Config.h (and you can't reach `/admin`).**
+The `kAdminIPs` / `kConsumerAllowlist` arrays in Config.h are only *seeds* copied on first boot;
+afterward the persisted NVS copy is authoritative and survives reflashes. So editing `Config.h`
+and reflashing does **not** change who is an admin. To recover, use the serial override:
+
+    reset-admin 192.168.1.6
+
+This replaces the persisted admin list with that single address. It always refuses non-private
+addresses (10/8, 172.16/12, 192.168/16, 127/8, 169.254/16) regardless of `kAdminIPsNonPublicOnly`,
+so it can't open the admin console to the public internet.
 
 ---
 

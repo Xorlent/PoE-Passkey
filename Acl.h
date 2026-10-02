@@ -38,6 +38,13 @@ bool acl_add(acl_list_t list, uint32_t ip);
 // Remove one address. Fails if edits are disabled or the address is absent. Persists.
 bool acl_remove(acl_list_t list, uint32_t ip);
 
+// Replace the admin allowlist with a single entry, overwriting whatever was
+// stored (runtime edits included). ALWAYS requires a non-public IPv4 address -
+// as if kAdminIPsNonPublicOnly were true, regardless of the compiled flag - so
+// this serial-only override cannot open the admin surface to the public internet.
+// Returns false when `ip` is not non-public (nothing is changed).
+bool acl_reset_admin(uint32_t ip);
+
 // Is `ip` (network byte order) non-public (RFC 1918 10/8, 172.16/12, 192.168/16,
 // plus 127/8 loopback and 169.254/16 link-local)? Enforces kAdminIPsNonPublicOnly.
 bool acl_is_non_public(uint32_t ip);

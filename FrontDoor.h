@@ -90,6 +90,11 @@ uint32_t frontdoor_connections_closed();
 // (a browser can be made to send those on behalf of some page the operator is viewing).
 bool frontdoor_admit_request(httpd_req_t* req);
 
+// Variant for the root route: when `allowCrossSite` is true the Sec-Fetch-Site
+// (cross-origin / drive-by) refusal is skipped, because the armed referer gate owns
+// admission there. Every other route calls frontdoor_admit_request().
+bool frontdoor_admit_request_ex(httpd_req_t* req, bool allowCrossSite);
+
 // httpd connection callbacks. on_open only accounts + logs (its verdict is discarded
 // under HTTPS). on_close also closes the socket: httpd's close_fn REPLACES its default
 // close(), so failing to close would leak a socket per connection.

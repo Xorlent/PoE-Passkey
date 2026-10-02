@@ -384,12 +384,94 @@ static esp_err_t handler_not_found(httpd_req_t* req, httpd_err_code_t error) {
     return send_json_status(req, "404 Not Found", "{\"error\":\"not_found\"}");
 }
 
+//////// Referer gate (root / route only) //////////
+
+// True when kAuthorizedReferrerURIHost is a valid FQDN (the gate is armed).
+static bool referrer_gate_armed() {
+    return fqdn_is_valid(kAuthorizedReferrerURIHost);
+}
+
+// Parse the Referer request header, extract its host, and compare case-insensitively
+// against kAuthorizedReferrerURIHost. False when the header is absent or mismatched.
+static bool referrer_host_matches(httpd_req_t* req) {
+    char referer[256];
+    memset(referer, 0, sizeof(referer));
+    if (httpd_req_get_hdr_value_str(req, "Referer", referer, sizeof(referer)) != ESP_OK) {
+        return false;
+    }
+    referer[sizeof(referer) - 1] = '\0';
+    const size_t cap = sizeof(referer);
+
+    // Skip past "://" if present, then scan the host to the next delimiter.
+    size_t hostBegin = 0;
+    for (size_t i = 0; i < cap && referer[i] != '\0'; ++i) {
+        if (referer[i] == ':' && i + 2 < cap &&
+            referer[i + 1] == '/' && referer[i + 2] == '/') {
+            hostBegin = i + 3;
+            break;
+        }
+    }
+
+    // Host runs to the first delimiter.
+    size_t hostLen = 0;
+    for (size_t i = hostBegin; i < cap && referer[i] != '\0'; ++i) {
+        const char c = referer[i];
+        if (c == '/' || c == '?' || c == '#' || c == '@' || c == ':' ||
+            c == ' ' || c == '\t' || c == '\r' || c == '\n') {
+            break;
+        }
+        hostLen = i - hostBegin + 1;
+    }
+
+    if (hostLen == 0) {
+        return false;
+    }
+
+    const char* want = kAuthorizedReferrerURIHost;
+    const size_t wantLen = want ? strlen(want) : 0;
+    if (hostLen != wantLen) {
+        return false;
+    }
+
+    for (size_t i = 0; i < hostLen; ++i) {
+        char a = referer[hostBegin + i];
+        char b = want[i];
+        if (a >= 'A' && a <= 'Z') {
+            a = (char)(a - 'A' + 'a');
+        }
+        if (b >= 'A' && b <= 'Z') {
+            b = (char)(b - 'A' + 'a');
+        }
+        if (a != b) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// Drop a mismatched-Referer request. Counts a failure toward kFailuresBeforeBlock
+// (like a failed auth); the IP is blocked once the threshold is reached within
+// kFailureWindowMs. Only the root route calls this.
+static esp_err_t referrer_denied(httpd_req_t* req, uint32_t peer, const char* ipStr) {
+    Log.printf("[referrer] refused %s: Referer host does not match kAuthorizedReferrerURIHost ('%s')\n",
+               ipStr, kAuthorizedReferrerURIHost);
+
+    // Aggregate exactly like a failed authentication so kFailuresBeforeBlock applies.
+    frontdoor_record_failure(peer);
+    Log.printf("[referrer] failure counted for %s: kFailuresBeforeBlock=%u\n",
+               ipStr, (unsigned)kFailuresBeforeBlock);
+
+    return send_json_status(req, "403 Forbidden", "{\"error\":\"forbidden\"}");
+}
+
 ////////---------------------------------------        HTTP handlers        ---------------------------------------////////
 
 // GET / - the public page (authenticate, i.e. authorize this source IP). One page load =
 // one request; /admin is never named in any served document.
 static esp_err_t handler_root(httpd_req_t* req) {
-    if (!frontdoor_admit_request(req)) {
+    // When the referer gate is armed it owns admission for "/", so the cross-site
+    // (Sec-Fetch-Site) refusal is skipped here and the referer check decides.
+    if (!frontdoor_admit_request_ex(req, /*allowCrossSite=*/referrer_gate_armed())) {
         return ESP_FAIL; // rejection response already sent; drop the connection
     }
     log_request(req);
@@ -399,6 +481,12 @@ static esp_err_t handler_root(httpd_req_t* req) {
     // No admin flag is computed here: nothing in this page depends on the caller being
     // an admin any more (see the handler note above and kIndexHtml).
     const String ipStr = ip.toString();
+
+    // Referrer gate: when kAuthorizedReferrerURIHost is a valid FQDN, the Referer host must
+    // match it. A mismatch drops the request and counts a failure toward kFailuresBeforeBlock.
+    if (referrer_gate_armed() && !referrer_host_matches(req)) {
+        return referrer_denied(req, peer, ipStr.c_str());
+    }
 
     // send_page() renders the template with a fresh CSP nonce and sends the matching policy
     // header - see its comment for why the nonce, the body and the header all live in that

@@ -161,3 +161,17 @@ bool acl_remove(acl_list_t list, uint32_t ip) {
     if (removed) persist(list);
     return removed;
 }
+
+bool acl_reset_admin(uint32_t ip) {
+    // Serial console lockout recovery, allows only non-public IP.
+    if (!acl_is_non_public(ip)) {
+        return false;
+    }
+
+    portENTER_CRITICAL(&s_lock);
+    s_admin[0] = ip;
+    s_adminN = 1;
+    portEXIT_CRITICAL(&s_lock);
+
+    return persist(ACL_ADMIN);
+}

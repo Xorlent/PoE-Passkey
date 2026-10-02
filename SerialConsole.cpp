@@ -8,6 +8,7 @@
 
 #include "Config.h"
 #include "SerialConsole.h"
+#include "Acl.h"
 #include "CertStore.h"
 #include "Clock.h"
 #include "Crypto.h"
@@ -45,16 +46,13 @@ static void print_help() {
     Log.println("  blocks        list blocked IPs (each block also logs its reason)");
     Log.println("  unblock <ip>  remove one IP from the blocklist");
     Log.println("  clear-blocks  remove every blocked IP");
+    Log.println("  reset-admin <ip>  replace the admin allowlist with one non-public IPv4");
     Log.println("  reboot        restart the device");
     Log.println("  help          this list");
 }
 
-// Heap headroom, labelled with the moment it was sampled. Internal RAM is what
-// the TLS sessions and the httpd stack come out of; PSRAM holds the blocklist.
+// Heap headroom, internal RAM (TLS sessions and the httpd stack), PSRAM (for blocklist).
 void memory_report(const char* when) {
-    // PSRAM is optional for correctness but assumed by the buffer placements (blocklist,
-    // page buffer, ceremony arena), so say plainly when it is missing instead of leaving
-    // the reader to notice that "0 / 0 B" is not a reading.
     const size_t psramTotal = heap_caps_get_total_size(MALLOC_CAP_SPIRAM);
     Log.printf(
         "Memory [%s]: internal free %u B (low-water %u B), PSRAM free %u / %u B%s\n",
@@ -529,6 +527,19 @@ void serial_console_poll() {
     } else if (cmd == "clear-blocks") {
         frontdoor_clear_blocklist();
         Log.println("Blocklist cleared. Every previously blocked host can reconnect.");
+    } else if (cmd.startsWith("reset-admin ")) {
+        String arg = cmd.substring(12);
+        arg.trim();
+        IPAddress addr;
+        if (!addr.fromString(arg)) {
+            Log.println("Usage: reset-admin <ipv4 address>   (must be non-public, e.g. 192.168.1.6)");
+        } else if (acl_reset_admin((uint32_t)addr)) {
+            Log.printf("Admin allowlist reset to %s (persisted; survives reboot).\n",
+                           addr.toString().c_str());
+        } else {
+            Log.println("Refused: that address is not non-public (must be 10/8, 172.16/12, "
+                           "192.168/16, 127/8, or 169.254/16).");
+        }
     } else if (cmd == "clear-cert") {
         Log.println(certstore_clear_cert() ? "Certificate cleared." : "No certificate to clear.");
     } else if (cmd == "clear-key") {

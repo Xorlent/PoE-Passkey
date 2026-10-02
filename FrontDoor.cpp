@@ -616,6 +616,10 @@ static bool request_is_json(httpd_req_t* req) {
 }
 
 bool frontdoor_admit_request(httpd_req_t* req) {
+    return frontdoor_admit_request_ex(req, /*allowCrossSite=*/false);
+}
+
+bool frontdoor_admit_request_ex(httpd_req_t* req, bool allowCrossSite) {
     uint32_t ip = frontdoor_peer_ipv4(httpd_req_to_sockfd(req));
 
     // Headers every response carries, set here so even the gate's own refusals have
@@ -628,7 +632,9 @@ bool frontdoor_admit_request(httpd_req_t* req) {
     const char* status;
     const char* body;
 
-    if (request_is_cross_site(req)) {
+    // Cross-site (fetch-metadata) refusal is skipped when the caller owns admission
+    // with a stronger check - the root route does this with the armed referer gate.
+    if (!allowCrossSite && request_is_cross_site(req)) {
         // Refused, not blocked: the browser is acting for another page.
         status = "403 Forbidden";
         body = "{\"error\":\"cross_site\"}";
