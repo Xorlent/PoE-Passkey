@@ -1567,8 +1567,8 @@ void setup() {
     s_maxOpenSockets = cfg.httpd.max_open_sockets;
     cfg.httpd.lru_purge_enable = true;
     cfg.httpd.backlog_conn = 8;
-    cfg.httpd.recv_wait_timeout = 2;
-    cfg.httpd.send_wait_timeout = 2;
+    cfg.httpd.recv_wait_timeout = 1;
+    cfg.httpd.send_wait_timeout = 1;
     cfg.httpd.stack_size = 10240;
     cfg.httpd.keep_alive_enable = true;
     cfg.httpd.keep_alive_idle = 5;       // seconds of no traffic before the first probe
