@@ -35,7 +35,9 @@ int b64url_decode(const char* in, size_t inLen, uint8_t* out, size_t outCap);
 
 // Verify an ES256 (P-256 ECDSA) signature.
 //   pubX/pubY : the 32-byte big-endian public key coordinates.
-//   msg/mLen  : the signed bytes (SHA-256(clientDataJSON) || authenticatorData).
+//   msg/mLen  : the signed bytes (authenticatorData || SHA-256(clientDataJSON)).
+//               authenticatorData first, per WebAuthn L2 7.2 step 11; the order is
+//               what binds the client data to the RP/credential context.
 //   derSig    : the ASN.1 DER-encoded ECDSA signature (as produced by WebAuthn).
 bool crypto_verify_es256(const uint8_t pubX[32], const uint8_t pubY[32],
                          const uint8_t* msg, size_t mLen,
