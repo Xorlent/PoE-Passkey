@@ -680,7 +680,7 @@ static esp_err_t handler_register_finish(httpd_req_t* req) {
         return send_json_status(req, "413 Payload Too Large", "{\"error\":\"payload\"}");
     }
 
-    if (!webauthn_register_finish(body, (size_t)bl)) {
+    if (!webauthn_register_finish(body, (size_t)bl, req_client_ip(req))) {
         free(body);
         return send_json_status(req, "400 Bad Request", "{\"error\":\"registration_failed\"}");
     }

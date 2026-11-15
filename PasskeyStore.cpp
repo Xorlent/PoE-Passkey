@@ -514,34 +514,39 @@ bool registration_create(const uint8_t challenge[32], uint32_t peerIp,
     return true;
 }
 
-bool session_consume(const uint8_t challenge[32]) {
+bool session_consume(const uint8_t challenge[32], uint32_t peerIp) {
     const uint32_t now = millis();
     for (uint16_t i = 0; i < kMaxSessions; ++i) {
-        if (s_sessions[i].active && crypto_const_eq(s_sessions[i].challenge, challenge, 32)) {
-            if (session_expired(s_sessions[i].createdAtMs, now)) {
-                s_sessions[i].active = false;
-                return false;
-            }
-            s_sessions[i].active = false; // one-time consumption
-            return true;
+        if (!s_sessions[i].active) continue;
+        if (!crypto_const_eq(s_sessions[i].challenge, challenge, 32)) continue;
+        // The ceremony belongs to the peer that started it, mismatch leaves the slot untouched
+        // 0 -> fail closed.
+        if (peerIp == 0 || s_sessions[i].peerIp != peerIp) return false;
+        if (session_expired(s_sessions[i].createdAtMs, now)) {
+            s_sessions[i].active = false;
+            return false;
         }
+        s_sessions[i].active = false; // one-time consumption
+        return true;
     }
     return false;
 }
 
-bool registration_consume(const uint8_t challenge[32], RegistrationSession* out) {
+bool registration_consume(const uint8_t challenge[32], uint32_t peerIp, RegistrationSession* out) {
     const uint32_t now = millis();
     for (uint16_t i = 0; i < kMaxRegistrations; ++i) {
-        if (s_registrations[i].active &&
-            crypto_const_eq(s_registrations[i].challenge, challenge, 32)) {
-            if (session_expired(s_registrations[i].createdAtMs, now)) {
-                s_registrations[i].active = false;
-                return false;
-            }
-            if (out) memcpy(out, &s_registrations[i], sizeof(*out));
-            s_registrations[i].active = false; // one-time consumption
-            return true;
+        if (!s_registrations[i].active) continue;
+        if (!crypto_const_eq(s_registrations[i].challenge, challenge, 32)) continue;
+        // The ceremony belongs to the peer that started it, mismatch leaves the slot untouched
+        // 0 -> fail closed.
+        if (peerIp == 0 || s_registrations[i].peerIp != peerIp) return false;
+        if (session_expired(s_registrations[i].createdAtMs, now)) {
+            s_registrations[i].active = false;
+            return false;
         }
+        if (out) memcpy(out, &s_registrations[i], sizeof(*out));
+        s_registrations[i].active = false; // one-time consumption
+        return true;
     }
     return false;
 }

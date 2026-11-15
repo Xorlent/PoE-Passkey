@@ -426,7 +426,7 @@ int webauthn_auth_start(char* out, size_t outCap, uint32_t peerIp) {
 // Registration: finish (verify attestation, store credential)
 // ---------------------------------------------------------------------------
 
-bool webauthn_register_finish(const char* body, size_t bodyLen) {
+bool webauthn_register_finish(const char* body, size_t bodyLen, uint32_t peerIp) {
     const uint8_t* b = (const uint8_t*)body;
 
     Scratch s(SCRATCH_CAP);
@@ -509,7 +509,7 @@ bool webauthn_register_finish(const char* body, size_t bodyLen) {
     }
 
     RegistrationSession rec;
-    if (!registration_consume(challenge, &rec)) {
+    if (!registration_consume(challenge, peerIp, &rec)) {
         if (kWebAuthnFailureLog) {
             Log.printf("[webauthn] %s: no live registration for this challenge "
                           "(never issued, already consumed, or older than %u ms)\n",
@@ -710,7 +710,7 @@ bool webauthn_auth_finish(const char* body, size_t bodyLen, uint32_t srcIp) {
     // never issued by this device, was already used, or has aged past kSessionTtlMs
     // fails here. This is the check that a stale page (or a second tab that consumed
     // the challenge) trips.
-    if (!session_consume(challenge)) {
+    if (!session_consume(challenge, srcIp)) {
         if (kWebAuthnFailureLog) {
             Log.printf("[webauthn] %s: no live session for this challenge "
                           "(never issued, already consumed, or older than %u ms)\n",

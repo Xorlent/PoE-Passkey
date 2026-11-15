@@ -22,8 +22,10 @@
 //   -2 malformed email, -3 registration store full, -4 encode error, -5 truncation.
 int webauthn_register_start(const char* email, char* out, size_t outCap, uint32_t peerIp);
 
-// Verify the attestation response (JSON body) and store the credential.
-bool webauthn_register_finish(const char* body, size_t bodyLen);
+// Verify the attestation response (JSON body) and store the credential. `peerIp` is the
+// caller's source address (network byte order): the ceremony only completes for the peer
+// that started it.
+bool webauthn_register_finish(const char* body, size_t bodyLen, uint32_t peerIp);
 
 // Build PublicKeyCredentialRequestOptions JSON (usernameless) into `out`. Starts an auth
 // ceremony for `peerIp` (network byte order, 0 = unknown); the per-IP cap

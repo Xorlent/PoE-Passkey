@@ -97,12 +97,15 @@ bool session_create(const uint8_t challenge[32], uint32_t peerIp);
 bool registration_create(const uint8_t challenge[32], uint32_t peerIp,
                          const char* email, const uint8_t* userHandle, uint8_t uhl);
 
-// Consume (one-time) and clear the auth session matching `challenge`; enforces TTL.
-bool session_consume(const uint8_t challenge[32]);
+// Consume (one-time) and clear the auth session matching `challenge` and `peerIp`; enforces
+// TTL. A challenge issued to a different peer is refused without being consumed.
+bool session_consume(const uint8_t challenge[32], uint32_t peerIp);
 
-// Consume (one-time) and clear the registration matching `challenge`, copying the identity
-// into `out`; enforces TTL.
-bool registration_consume(const uint8_t challenge[32], RegistrationSession* out);
+// Consume (one-time) and clear the registration matching `challenge` and `peerIp`, copying
+// the identity into `out`; enforces TTL. A challenge issued to a different peer is refused
+// without being consumed.
+bool registration_consume(const uint8_t challenge[32], uint32_t peerIp,
+                          RegistrationSession* out);
 
 // ---- Authorized IPs (RAM, TTL) ----
 bool   authzips_add(uint32_t ip, uint32_t ttlMs);
