@@ -622,7 +622,8 @@ bool webauthn_register_finish(const char* body, size_t bodyLen, uint32_t peerIp)
 // Authentication: finish (verify assertion, record source IP)
 // ---------------------------------------------------------------------------
 
-bool webauthn_auth_finish(const char* body, size_t bodyLen, uint32_t srcIp) {
+bool webauthn_auth_finish(const char* body, size_t bodyLen, uint32_t srcIp, bool* storeFull) {
+    if (storeFull) *storeFull = false;
     const uint8_t* b = (const uint8_t*)body;
 
     Scratch s(SCRATCH_CAP);
@@ -792,7 +793,11 @@ bool webauthn_auth_finish(const char* body, size_t bodyLen, uint32_t srcIp) {
         WA_FAIL("could not persist the new sign counter (NVS write failed)");
     }
 
-    authzips_add(srcIp, kAuthorizedIPTtlMs);
+    // Everything above this line is verification; from here it is only bookkeeping.
+    if (!authzips_add(srcIp, kAuthorizedIPTtlMs)) {
+        if (storeFull) *storeFull = true;
+        return false;               // the assertion was valid: not a verification failure
+    }
     // Record which key is behind this address (admin listing only; bookkeeping, can't fail).
     authzips_note_user(srcIp, credSlot);
     return true;

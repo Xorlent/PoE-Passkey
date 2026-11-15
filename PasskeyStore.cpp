@@ -572,6 +572,9 @@ static uint32_t s_credAuthzIp[kMaxCredentials];
 static portMUX_TYPE s_authzLock = portMUX_INITIALIZER_UNLOCKED;
 
 bool authzips_add(uint32_t ip, uint32_t ttlMs) {
+    // Release expired entries before deciding the store is full: loop() prunes every
+    // 100 ms, so this only matters when a burst of authentications lands between passes.
+    authzips_prune(millis());
     uint32_t now = millis();
     bool ok = false;
 

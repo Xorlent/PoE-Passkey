@@ -726,18 +726,30 @@ static esp_err_t handler_auth_finish(httpd_req_t* req) {
         return send_json_status(req, "413 Payload Too Large", "{\"error\":\"payload\"}");
     }
 
-    if (!webauthn_auth_finish(body, (size_t)bl, ip)) {
-        frontdoor_record_failure(ip);
-        free(body);
-        return send_json_status(req, "401 Unauthorized", "{\"error\":\"authentication_failed\"}");
+    bool storeFull = false;
+    const bool ok = webauthn_auth_finish(body, (size_t)bl, ip, &storeFull);
+    free(body);
+
+    if (ok) {
+        // A successful authentication resets this IP's failure streak.
+        frontdoor_clear_failures(ip);
+        return send_json(req, "{\"ok\":true}");
     }
 
-    // A successful authentication resets this IP's failure streak.
-    frontdoor_clear_failures(ip);
+    if (storeFull) {
+        // The key verified, so this must NOT count toward the block threshold: a full
+        // store would otherwise start blocking the users it just refused.
+        char ipBuf[16];
+        ipv4_to_string(ip, ipBuf, sizeof(ipBuf));
+        Log.printf("[auth] %s: a valid key verified, but all %u authorized-IP slots are "
+                      "in use; the address was not authorized\n",
+                      ipBuf, (unsigned)kMaxAuthorizedIPs);
+        return send_json_status(req, "507 Insufficient Storage",
+                                "{\"error\":\"authorized_ip_store_full\"}");
+    }
 
-    esp_err_t rc = send_json(req, "{\"ok\":true}");
-    free(body);
-    return rc;
+    frontdoor_record_failure(ip);
+    return send_json_status(req, "401 Unauthorized", "{\"error\":\"authentication_failed\"}");
 }
 
 // POST /auth/cancel - the page reports that the user cancelled/aborted the WebAuthn

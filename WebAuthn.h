@@ -33,7 +33,10 @@ bool webauthn_register_finish(const char* body, size_t bodyLen, uint32_t peerIp)
 // Returns length (>=0) or negative error.
 int webauthn_auth_start(char* out, size_t outCap, uint32_t peerIp);
 
-// Verify the assertion response; on success records `srcIp` as authorized.
-bool webauthn_auth_finish(const char* body, size_t bodyLen, uint32_t srcIp);
+// Verify the assertion response; on success records `srcIp` as authorized. Returns true
+// only when the address was authorized. A valid assertion that cannot be recorded
+// because the authorized-IP store is full returns false with *storeFull = true, so the
+// caller reports 507 rather than 401.
+bool webauthn_auth_finish(const char* body, size_t bodyLen, uint32_t srcIp, bool* storeFull);
 
 #endif // WEBAUTHN_H
