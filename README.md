@@ -17,15 +17,58 @@ can use to dynamically allow connections to protected services/resources.
 
 ---
 
-## What it does
+## What PoE-Passkey does
 
-- **Sign in** - a user taps their key; the device authorizes the IP address they came from.
+- **Sign in** - a user inserts, unlocks, and taps their key.
 - **Enroll / revoke** - an administrator (from an approved IP address) registers/revokes keys, 
 and manages the authorized-address list.
 - **Consume** - a downstream appliance fetches the current list of authorized IP addresses.
 
 Everything runs over **HTTPS on port 443**. Certificates must be P-256 / ES256 for optimal performance 
 and memory utilization.
+
+---
+
+## Why Passkeys
+
+A passkey is a key pair, not a shared secret. The security key generates the private half internally 
+and will not export it; PoE-Passkey only ever receives the public key, the credential ID, the user 
+handle and a signature counter. At sign-in the device sends a random 32-byte challenge; the key signs
+it, and the device checks that signature against the stored public key and the site it belongs to
+(the relying party, or RP), so nothing sensitive is discoverable over the wire.
+
+### Versus passwords
+- **Nothing to steal or reuse.** No password means no credential stuffing, no password spraying, no
+  replay of a breach dump, and no password store on the device to exfiltrate. To match the challenge,
+  a password would need to be about 40 random characters (or 20 random words) and it could still be
+  phished.
+- **Phishing-resistant by construction.** A passkey is bound to the exact site it was created for. On
+  a lookalike domain the browser won't even offer it, so there is nothing to phish.
+- **No resets.** There is no reset flow for an attacker to socially engineer.
+- **No reuse.** Passkeys guarantee a credential cannot be reused with other sites.
+
+### Versus MFA tokens (OTP, push, SMS)
+- **No relayable code.** A one-time password can be typed into a phishing page in real time. A
+  passkey signs a per-request challenge that is bound to the origin, and the signature counter must
+  strictly increase; replayed or cloned assertions are rejected.
+- **No phone, app, or carrier in the loop.** The hardware key is both factors: possession plus a
+  touch. There is no separate password for an attacker to phish first.
+- **No prompt fatigue.** Nothing is pushed to a device that a user can approve by reflex. The key
+  signs only when it is unlocked and physically touched for a live challenge.
+
+### Even if this device is compromised, your keys stay secret
+
+The relying party - this device - is not a secret store. Each persisted credential record holds only 
+the public key, credential ID, user handle, identity and sign counter.
+
+- **Private keys never leave the authenticator.** Full compromise of the device (firmware, NVS, TLS
+  key and all) yields public keys and identities, not signing keys. An attacker who owns the box can
+  change what the box does, but cannot derive a user's private key, sign as that user, or impersonate
+  them against any other service.
+- **Credentials are scoped.** A registered key is bound to a single RP ID, so it is useless against
+  any other site, so the impact stays local.
+- **Confidentiality does not rest on trusting the RP.** Unlike a password database or a TOTP seed,
+  there is no stored secret whose disclosure lets an attacker authenticate as a user.
 
 ---
 
@@ -58,7 +101,7 @@ Everything you customize is at the top of `Config.h`. The important ones:
 | `kConsumerSecret` | Secret the consuming system must send | `CHANGE_ME` - change it |
 | `kAuthorizedIPTtlMs` | How long an address stays authorized | 10 hours |
 | `kSessionTtlMs` | How long a sign-in prompt stays valid | 1 minute |
-| `kFailuresBeforeBlock` / `kFailureWindowMs` | Failed sign-ins before an IP is blocked (they must fall within the window) | 3 / 5 min |
+| `kFailuresBeforeBlock` / `kFailureWindowMs` | Failed sign-ins before an IP is blocked (they must fall within the window) | 5 / 5 min |
 | `kAuthorizedReferrerURIHost` | FQDN whose Referer header the root `/` route requires; a mismatch counts a failure toward `kFailuresBeforeBlock`. `"NotEnforced"` disables the check | `NotEnforced` |
 
 **Set a real `kConsumerSecret`.** Choose something long and random and treat it like a password.
@@ -285,16 +328,19 @@ It's waiting for the TLS certificate and key. Run `import` and paste both.
 From the serial console: `unblock <ip>` (or `clear-blocks`). Consider whether `kAdminIPs` or
 `kConsumerAllowlist` needs updating.
 
-**The admin allowlist no longer matches `kAdminIPs` in Config.h (and you can't reach `/admin`).**
+**You reflashed with new `kAdminIPs` values but `/admin` still refuses you.**
 The `kAdminIPs` / `kConsumerAllowlist` arrays in Config.h are only *seeds* copied on first boot;
-afterward the persisted NVS copy is authoritative and survives reflashes. So editing `Config.h`
-and reflashing does **not** change who is an admin. To recover, use the serial override:
+afterward the persisted NVS copy is authoritative and survives reflashes. Editing `Config.h` and
+reflashing does **not** change who is an admin, and the refused request answers
+`404 {"error":"not_found"}` and blocks that address (later connections time out, and the log shows
+TLS handshake aborts). Recover from the serial console, in this order:
 
-    reset-admin 192.168.1.6
+    unblock <your IP address>
+    reset-admin <your IP address>
 
-This replaces the persisted admin list with that single address. It always refuses non-private
-addresses (10/8, 172.16/12, 192.168/16, 127/8, 169.254/16) regardless of `kAdminIPsNonPublicOnly`,
-so it can't open the admin console to the public internet.
+`reset-admin` replaces the admin list with that one address; it does not clear the blocklist, hence
+the `unblock` first. It refuses public addresses (only 10/8, 172.16/12, 192.168/16, 127/8,
+169.254/16), so it cannot open the admin console to the internet.
 
 ---
 

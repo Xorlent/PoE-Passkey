@@ -440,7 +440,13 @@ async function enroll() {
     credsLoaded = false;
     selectTab('Creds', false);
   } catch (e) {
-    setStatus('Error: ' + explain(e), true);
+    if (e.name === 'NotAllowedError' || e.name === 'NotSupportedError') {
+      setStatus('Enrollment did not complete. The request was cancelled, timed out (60 s), or was not allowed.\n' +
+                'The key is required to confirm a PIN or biometric. Set a PIN on the key, then retry.\n' +
+                'If the key does not support user verification, set kRequireUserVerification = false in Config.h.', true);
+    } else {
+      setStatus('Error: ' + explain(e), true);
+    }
   } finally {
     enrolling = false;
   }

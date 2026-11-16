@@ -43,6 +43,9 @@ static constexpr const char* const kRpId = "passkey.vuln.plc.local";
 // Origin: "https://" + a host equal to kRpId (or a subdomain of it).
 static constexpr const char* const kOrigin = "https://passkey.vuln.plc.local";
 
+// Require PIN or biometric unlock to protect a stolen authenticator
+static constexpr bool kRequireUserVerification = true;
+
 ////////// Clock (NTP) //////////
 const IPAddress ntpSvr(192, 168, 1, 5);       // Set internal NTP server IP address.
 //const char* const ntpSvr = "pool.ntp.org";  // Or set a NTP DNS server hostname.
@@ -93,7 +96,7 @@ static constexpr uint16_t kBlocklistMaxEntries = 16384;
 // than kFailureWindowMs apart do not accumulate (a success resets the streak).
 // If kAuthorizedReferrerURIHost is also configured, invalid referer hosts will count
 // towards this accumulator.
-static constexpr uint16_t kFailuresBeforeBlock = 3;
+static constexpr uint16_t kFailuresBeforeBlock = 5;
 
 // Failure streak expiry (ms).
 static constexpr uint32_t kFailureWindowMs = 300000;

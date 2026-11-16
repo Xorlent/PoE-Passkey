@@ -389,11 +389,12 @@ int webauthn_register_start(const char* email, char* out, size_t outCap, uint32_
         "\"pubKeyCredParams\":[{\"type\":\"public-key\",\"alg\":-7}],"
         "\"timeout\":60000,\"attestation\":\"none\","
         "\"authenticatorSelection\":{\"residentKey\":\"required\","
-        "\"requireResidentKey\":true,\"userVerification\":\"discouraged\"},"
+        "\"requireResidentKey\":true,\"userVerification\":\"%s\"},"
         "\"excludeCredentials\":[]}",
         kRpId,
         (int)ul, b64User, norm, norm,
-        (int)cl, b64Challenge);
+        (int)cl, b64Challenge,
+        kRequireUserVerification ? "required" : "discouraged");
 
     if (n < 0 || (size_t)n >= outCap) return -5;
     return n;
@@ -415,8 +416,9 @@ int webauthn_auth_start(char* out, size_t outCap, uint32_t peerIp) {
 
     int n = snprintf(out, outCap,
         "{\"challenge\":\"%.*s\",\"rpId\":\"%s\",\"timeout\":60000,"
-        "\"userVerification\":\"discouraged\"}",
-        (int)cl, b64, kRpId);
+        "\"userVerification\":\"%s\"}",
+        (int)cl, b64, kRpId,
+        kRequireUserVerification ? "required" : "discouraged");
 
     if (n < 0 || (size_t)n >= outCap) return -3;
     return n;
@@ -561,6 +563,9 @@ bool webauthn_register_finish(const char* body, size_t bodyLen, uint32_t peerIp)
         return false;
     }
     if (!(flags & 0x01)) WA_FAIL("user presence flag is not set"); // UP required
+    if (kRequireUserVerification && !(flags & 0x04)) {
+        WA_FAIL("user verification flag is not set");
+    }
 
     if (aCredIdLen != (size_t)idLen || !crypto_const_eq(aCredId, credId, idLen)) {
         if (kWebAuthnFailureLog) {
@@ -743,6 +748,9 @@ bool webauthn_auth_finish(const char* body, size_t bodyLen, uint32_t srcIp, bool
         return false;
     }
     if (!(flags & 0x01)) WA_FAIL("user presence flag is not set"); // UP required
+    if (kRequireUserVerification && !(flags & 0x04)) {
+        WA_FAIL("user verification flag is not set");
+    }
 
     StoredCredential cred;
     CredRuntime rt;
