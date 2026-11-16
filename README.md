@@ -309,16 +309,11 @@ so it can't open the admin console to the public internet.
 - 16,384 entry real-time blocklist capacity
 - TLS material is encrypted at rest by default. On the first `import` the device burns eFuse
   `BLK_KEY5` (permanent, once per device) and stores the certificate and private key AES-256-GCM
-  encrypted in the `nvs_tls` partition, which is erased when material is sealed so no obsolete
-  plaintext record can survive there. The burn never repeats - a renewed certificate is re-sealed
+  encrypted in the `nvs_tls` partition. Renewed or regenerated certificates are re-sealed
   under the same key. `BLK_KEY5` is the only key block this project uses, leaving `KEY0`..`KEY4`
   free for flash encryption or secure boot. `wrap-status` reports the state, and `wrap-key`
   performs the same burn by hand for a device whose material was imported earlier. Set
-  `kAtRestWrapRequired = false` only if you must store the key in plaintext; note that a unit
-  which previously stored material in plaintext must be fully erased (`esptool.py erase_flash`)
-  and re-flashed before enabling this, or the old private key stays recoverable from the legacy
-  partition. There is intentionally no coredump partition (a panic image would write the key from
-  RAM to unencrypted flash), so the boot log shows `No core dump partition found!` twice - that
-  is expected
+  `kAtRestWrapRequired = false` only if you must store the key in plaintext.
+- There is no coredump partition, so you can expect the boot log to show `No core dump partition found!`
 - Enrollment is gated only by the admin's **source IP** (`kAdminIPs` in Config.h)
 - Authorized addresses expire on their own based on the  `kAuthorizedIPTtlMs` TTL value configured in Config.h
