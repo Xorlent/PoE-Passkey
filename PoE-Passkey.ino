@@ -29,6 +29,7 @@
 #include "IndexHtml.h"
 #include "AdminHtml.h"
 #include "CertStore.h"
+#include "AtRestCrypto.h"
 #include "SerialConsole.h"
 #include "Clock.h"
 #include "SafePrint.h"
@@ -1424,9 +1425,19 @@ static bool resolve_tls(const uint8_t** cert, size_t* certLen,
     }
     *cert = (const uint8_t*)c; *certLen = cl;
     *key  = (const uint8_t*)k; *keyLen  = kl;
-    Log.println("Using TLS material imported via serial console (NVS).");
+
+    const bool certSealed = (certstore_cert_material() == CERT_MATERIAL_SEALED);
+    const bool keySealed  = (certstore_key_material()  == CERT_MATERIAL_SEALED);
+    if (certSealed && keySealed) {
+        Log.println("Using TLS material from NVS: encrypted with eFuse " ATREST_BLOCK_NAME ".");
+    } else {
+        Log.printf("Using TLS material from NVS: NOT encrypted at rest "
+                      "(cert %s, key %s) - run 'wrap-key' to seal it.\n",
+                      certSealed ? "sealed" : "plaintext",
+                      keySealed ? "sealed" : "plaintext");
+    }
     print_tls_material(c, cl, kl);
-    ESP_LOGI(TAG, "Using TLS material imported via serial console (NVS).");
+    ESP_LOGI(TAG, "Using TLS material from NVS.");
     return true;
 }
 
@@ -1561,12 +1572,21 @@ void setup() {
     const uint8_t* keyPem;
     size_t keyLen;
     if (!resolve_tls(&certPem, &certLen, &keyPem, &keyLen)) {
+        const bool unreadable = (certstore_cert_material() == CERT_MATERIAL_UNREADABLE) ||
+                                (certstore_key_material() == CERT_MATERIAL_UNREADABLE);
         const bool haveCert = certstore_has_cert();
         const bool haveKey  = certstore_has_key();
         const char* msg;
-        if (!haveCert && !haveKey) msg = "No TLS certificate or private key imported.";
-        else if (!haveCert)       msg = "TLS certificate missing (private key present).";
-        else                      msg = "TLS private key missing (certificate present).";
+        if (unreadable) {
+            msg = "TLS material is sealed but could not be decrypted (eFuse wrapping "
+                  "key missing or wrong slot).";
+        } else if (!haveCert && !haveKey) {
+            msg = "No TLS certificate or private key imported.";
+        } else if (!haveCert) {
+            msg = "TLS certificate missing (private key present).";
+        } else {
+            msg = "TLS private key missing (certificate present).";
+        }
         halt_with_console(msg);
     }
 

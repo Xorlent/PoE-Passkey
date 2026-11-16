@@ -136,6 +136,14 @@ static const IPAddress kConsumerAllowlist[] = {
     IPAddress(192, 168, 1, 5),
 };
 
+////////// TLS material encryption //////////
+
+// true  = burn BLK_KEY5 during `import` if needed, and refuse to store plaintext (default).
+// false = seal when a key is present, otherwise store plaintext.
+static constexpr bool kAtRestWrapRequired = true;
+
+// The wrapping key lives in eFuse BLK_KEY5 (purpose HMAC_UP)
+
 ////////--------------------------------------- END OF CONFIGURATION SETTINGS ---------------------------------------////////
 
 // Max POST body bytes accepted (fail closed).

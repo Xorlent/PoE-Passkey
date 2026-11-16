@@ -367,7 +367,7 @@ function renderCreds() {
   if (disabled > 0) { count += ' (' + disabled + ' disabled)'; }
   $('credCount').textContent = count;
   $('credMsg').textContent = shown.length > 0 ? ''
-    : (creds.length === 0 ? 'Nothing enrolled yet - use the Enroll Key tab to add a key.'
+    : (creds.length === 0 ? 'Nothing enrolled yet - use the Security tab to add a key.'
                           : 'No key matches "' + typed + '".');
 }
 

@@ -10,6 +10,7 @@
 #include "SerialConsole.h"
 #include "Acl.h"
 #include "CertStore.h"
+#include "AtRestCrypto.h"
 #include "Clock.h"
 #include "Crypto.h"
 #include "EthGate.h"
@@ -28,7 +29,8 @@
 
 // Static buffers (not on the 8 KB loopTask stack); the console is single-threaded.
 static char s_pem_raw[MAX_CERT_PEM_LEN + 1];
-static char s_pem_out[MAX_CERT_PEM_LEN + 1];
+static char s_cert_pem[MAX_CERT_PEM_LEN + 1];
+static char s_key_pem[MAX_KEY_PEM_LEN + 1];
 
 // How long a certificate paste must be silent before it is finished (a chain arrives in one
 // paste, so the first "-----END " can't end it). The key prompt passes 0 (one block only).
@@ -47,6 +49,8 @@ static void print_help() {
     Log.println("  unblock <ip>  remove one IP from the blocklist");
     Log.println("  clear-blocks  remove every blocked IP");
     Log.println("  reset-admin <ip>  replace the admin allowlist with one non-public IPv4");
+    Log.println("  wrap-status   show the eFuse wrapping key and how TLS material is stored");
+    Log.println("  wrap-key      burn the eFuse wrapping key and re-seal TLS material (one-way)");
     Log.println("  reboot        restart the device");
     Log.println("  help          this list");
 }
@@ -182,8 +186,8 @@ static size_t normalize_pem(const char* in, size_t inLen, char* out, size_t outC
     return o;
 }
 
-// Guided import: prompt for the certificate (a chain is fine), then the private key, then
-// reboot.
+// Guided import: certificate (a chain is fine), then the private key. Nothing is
+// written until both are validated.
 static void do_import() {
     // 1. Certificate. One paste may carry the whole chain - leaf first, then any
     // intermediates - because that is what a client needs when the leaf is not signed by a
@@ -191,34 +195,22 @@ static void do_import() {
     Log.println("Paste the certificate PEM (leaf first; intermediates after it, if any):");
     int n = read_pem(s_pem_raw, MAX_CERT_PEM_LEN, kPemQuietMs);
     if (n < 0) {
-        Log.println("Import aborted (timeout or too large).");
+        Log.println("Import aborted (timeout or too large). Nothing was changed.");
         return;
     }
-    size_t pl = normalize_pem(s_pem_raw, (size_t)n, s_pem_out, MAX_CERT_PEM_LEN, true);
-    if (pl == 0) {
+    const size_t cl = normalize_pem(s_pem_raw, (size_t)n, s_cert_pem, MAX_CERT_PEM_LEN, true);
+    if (cl == 0) {
         Log.println("Invalid certificate PEM (missing BEGIN/END markers). Import aborted.");
         return;
     }
     // Refuse the wrong KIND of PEM here, rather than storing it and letting the server fail to
     // start: the realistic way to get it wrong is pasting a chain in two steps, which leaves
     // the intermediate in the input buffer for the KEY prompt below.
-    if (strstr(s_pem_out, "CERTIFICATE-----") == nullptr) {
+    if (strstr(s_cert_pem, "CERTIFICATE-----") == nullptr) {
         Log.println("That is not a certificate PEM (expected -----BEGIN CERTIFICATE-----). "
                        "Import aborted.");
         return;
     }
-    if (!certstore_save_cert(s_pem_out, pl)) {
-        Log.println("Failed to save certificate. Import aborted.");
-        return;
-    }
-    // Say how much was stored, not just that it worked: a chain that arrived incomplete
-    // looks exactly like a chain that arrived whole until a browser refuses the handshake.
-    size_t blocks = 0;
-    for (const char* q = s_pem_out; (q = strstr(q, "-----BEGIN ")) != nullptr; q += 11) {
-        ++blocks;
-    }
-    Log.printf("Certificate saved: %u PEM block(s), %u bytes.\n",
-                  (unsigned)blocks, (unsigned)pl);
 
     // 2. Private key. One block, and the read finishes at its END marker (quietMs 0) so a
     // second block in the paste - the EC PARAMETERS an `openssl ecparam -genkey` key file
@@ -226,28 +218,73 @@ static void do_import() {
     Log.println("Paste the private key PEM and press Enter:");
     n = read_pem(s_pem_raw, MAX_KEY_PEM_LEN, 0);
     if (n < 0) {
-        Log.println("Import aborted (timeout or too large). Certificate was saved.");
+        Log.println("Import aborted (timeout or too large). Nothing was changed.");
         return;
     }
-    pl = normalize_pem(s_pem_raw, (size_t)n, s_pem_out, MAX_KEY_PEM_LEN, false);
-    if (pl == 0) {
+    const size_t kl = normalize_pem(s_pem_raw, (size_t)n, s_key_pem, MAX_KEY_PEM_LEN, false);
+    if (kl == 0) {
         Log.println("Invalid private key PEM (missing BEGIN/END markers). Import aborted.");
         return;
     }
     // Matches PKCS#8 ("BEGIN PRIVATE KEY"), SEC1 ("BEGIN EC PRIVATE KEY") and the legacy RSA
     // form - but not a certificate, which is what a chain pasted in two steps would leave here.
-    if (strstr(s_pem_out, "PRIVATE KEY-----") == nullptr) {
+    if (strstr(s_key_pem, "PRIVATE KEY-----") == nullptr) {
         Log.println("That is not a private key PEM (expected -----BEGIN PRIVATE KEY----- or "
                        "-----BEGIN EC PRIVATE KEY-----). Import aborted.");
         return;
     }
-    if (!certstore_save_key(s_pem_out, pl)) {
-        Log.println("Failed to save private key. Import aborted.");
+
+    // 3. Policy: with kAtRestWrapRequired the key is burned here, once; renewal finds it present.
+    if (kAtRestWrapRequired) {
+        const AtRestKeyState st = atrest_key_state();
+        if (st == ATREST_KEY_ERROR) {
+            Log.println("kAtRestWrapRequired is set but eFuse " ATREST_BLOCK_NAME
+                        " is owned by another purpose. Import aborted.");
+            return;
+        }
+        if (st == ATREST_NO_KEY) {
+            char msg[96];
+            if (!atrest_provision(msg, sizeof(msg))) {
+                Log.printf("Burning the wrapping key failed: %s\n", msg);
+                Log.println("Import aborted; nothing was written.");
+                return;
+            }
+            Log.println("Burned eFuse " ATREST_BLOCK_NAME " as an HMAC_UP key.");
+            certstore_clear_burn_latch();
+        }
+    }
+
+    // 4. Erase the partition first so no earlier plaintext record survives.
+    if (atrest_key_state() == ATREST_KEY_OK) {
+        if (!certstore_wipe_partition()) {
+            Log.println("Could not erase the TLS partition. Import aborted.");
+            return;
+        }
+    }
+
+    // 5. Store both halves (sealed whenever a wrapping key is present).
+    if (!certstore_save_cert(s_cert_pem, cl)) {
+        Log.println("Failed to save certificate. Import aborted.");
         return;
     }
-    Log.printf("Private key saved: %u bytes.\n", (unsigned)pl);
+    // Say how much was stored, not just that it worked: a chain that arrived incomplete
+    // looks exactly like a chain that arrived whole until a browser refuses the handshake.
+    size_t blocks = 0;
+    for (const char* q = s_cert_pem; (q = strstr(q, "-----BEGIN ")) != nullptr; q += 11) {
+        ++blocks;
+    }
+    Log.printf("Certificate saved: %u PEM block(s), %u bytes (%s).\n",
+                  (unsigned)blocks, (unsigned)cl,
+                  certstore_cert_material() == CERT_MATERIAL_SEALED ? "sealed" : "plaintext");
 
-    // 3. Done -> reboot.
+    if (!certstore_save_key(s_key_pem, kl)) {
+        Log.println("Failed to save private key. Import aborted (certificate was saved).");
+        return;
+    }
+    Log.printf("Private key saved: %u bytes (%s).\n", (unsigned)kl,
+                  certstore_key_material() == CERT_MATERIAL_SEALED ? "sealed" : "plaintext");
+
+    // 5. Done -> reboot.
     Log.println("All TLS material imported. Rebooting in 3 seconds...");
     delay(3000);
     ESP.restart();
@@ -414,6 +451,111 @@ bool run_selftest() {
     return false;
 }
 
+// Read one line from Serial with a timeout (used by the burn confirmation).
+static bool read_line(char* out, size_t cap, uint32_t timeoutMs) {
+    size_t n = 0;
+    const uint32_t start = millis();
+    out[0] = 0;
+    for (;;) {
+        while (Serial.available()) {
+            const char c = (char)Serial.read();
+            if (c == '\r') continue;
+            if (c == '\n') {
+                out[n] = 0;
+                return true;
+            }
+            if (n + 1 < cap) {
+                out[n++] = c;
+            }
+        }
+        if (millis() - start > timeoutMs) {
+            out[n] = 0;
+            return false;
+        }
+        delay(10);
+    }
+}
+
+static const char* material_name(CertMaterial m) {
+    switch (m) {
+        case CERT_MATERIAL_PLAIN:      return "plaintext";
+        case CERT_MATERIAL_SEALED:     return "sealed (eFuse-wrapped)";
+        case CERT_MATERIAL_UNREADABLE: return "UNREADABLE (no/wrong eFuse key)";
+        default:                       return "absent";
+    }
+}
+
+static void print_wrap_status() {
+    const AtRestKeyState st = atrest_key_state();
+    const char* k = (st == ATREST_KEY_OK)     ? "present (HMAC_UP, read-protected)"
+                    : (st == ATREST_NO_KEY)   ? "absent (block free)"
+                                              : "UNUSABLE (purpose reserved)";
+    Log.printf("eFuse key (%s):  %s\n", ATREST_BLOCK_NAME, k);
+    Log.printf("Certificate:      %s\n", material_name(certstore_cert_material()));
+    Log.printf("Private key:      %s\n", material_name(certstore_key_material()));
+    Log.printf("Storage policy:   %s\n",
+                  kAtRestWrapRequired ? "plaintext refused" : "plaintext allowed when unkeyed");
+    if (certstore_burn_latched()) {
+        Log.println("Burn latch:       SET (a previous eFuse burn failed; not retried)");
+    }
+}
+
+static void do_wrap_key() {
+    const AtRestKeyState st = atrest_key_state();
+    if (st == ATREST_KEY_OK) {
+        // Already provisioned: clear any stale latch and make sure material is sealed.
+        char m[96];
+        certstore_clear_burn_latch();
+        const bool ok = certstore_reseal(m, sizeof(m));
+        Log.printf("%s already holds an HMAC key; latch cleared, %s.\n",
+                      ATREST_BLOCK_NAME, ok ? "material sealed" : m);
+        return;
+    }
+    if (st == ATREST_KEY_ERROR) {
+        Log.printf("%s cannot be used (purpose reserved by something else).\n", ATREST_BLOCK_NAME);
+        return;
+    }
+    if (!certstore_has_cert() || !certstore_has_key()) {
+        Log.println("Import the certificate and private key first (`import`).");
+        return;
+    }
+
+    Log.println("\nAbout to burn eFuse " ATREST_BLOCK_NAME " as an HMAC_UP key.");
+    Log.println("This is PERMANENT. The stored TLS material will be re-encrypted under it.");
+    Log.println("KEY5 is the only block this project uses; KEY0..KEY4 stay free for");
+    Log.println("flash encryption or secure boot.");
+    Log.println("Type BURN and press Enter to continue, anything else to abort:");
+
+    char line[16];
+    if (!read_line(line, sizeof(line), 60000)) {
+        Log.println("Timed out. Nothing was burned.");
+        return;
+    }
+    if (strcmp(line, "BURN") != 0) {
+        Log.println("Aborted. Nothing was burned.");
+        return;
+    }
+
+    char msg[96];
+    if (!atrest_provision(msg, sizeof(msg))) {
+        Log.printf("Burn failed: %s\n", msg);
+        Log.println("No TLS material was changed.");
+        return;
+    }
+    Log.println("eFuse key burned and verified by a seal/open round trip.");
+    certstore_clear_burn_latch();
+
+    if (!certstore_reseal(msg, sizeof(msg))) {
+        Log.printf("WARNING: %s\n", msg);
+        Log.println("The key is usable, but the stored material may still be plaintext.");
+        Log.println("Check `wrap-status`, then run `import` to re-seal.");
+        return;
+    }
+    Log.println("TLS material re-sealed. Rebooting...");
+    delay(1500);
+    ESP.restart();
+}
+
 void serial_console_poll() {
     if (!Serial.available()) return;
 
@@ -466,6 +608,7 @@ void serial_console_poll() {
         } else {
             Log.println("Serving:               no certificate (httpd_ssl will not start)");
         }
+        print_wrap_status();
     } else if (cmd == "creds") {
         print_credentials();
     } else if (cmd == "selftest") {
@@ -547,6 +690,10 @@ void serial_console_poll() {
         Log.println(certstore_clear_cert() ? "Certificate cleared." : "No certificate to clear.");
     } else if (cmd == "clear-key") {
         Log.println(certstore_clear_key() ? "Private key cleared." : "No key to clear.");
+    } else if (cmd == "wrap-status") {
+        print_wrap_status();
+    } else if (cmd == "wrap-key") {
+        do_wrap_key();
     } else if (cmd == "reboot") {
         Log.println("Rebooting...");
         delay(100);

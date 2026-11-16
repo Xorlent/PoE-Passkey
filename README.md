@@ -52,6 +52,7 @@ Everything you customize is at the top of `Config.h`. The important ones:
 | `ntpSvr` | Time server (used for "last used" dates) | `192.168.1.5` - change it |
 | `kRpId` | Domain name keys are bound to | `passkey.vuln.plc.local` - change it |
 | `kOrigin` | Same, with `https://` | `https://passkey.vuln.plc.local` - change it |
+| `kAtRestWrapRequired` | Encrypt the TLS material in NVS with a key burned into eFuse `BLK_KEY5` on first import (see Notes and Limitations) | `true` |
 | `kAdminIPs` | Computers allowed to enroll / revoke | `192.168.1.5` |
 | `kConsumerAllowlist` | Systems allowed to read the address list | `192.168.1.5` |
 | `kConsumerSecret` | Secret the consuming system must send | `CHANGE_ME` - change it |
@@ -97,6 +98,10 @@ Then, for each device:
 
 The device serves **HTTPS**, so it needs a trusted certificate and a private key. You must generate, 
 sign, then import them over the Arduino USB serial console on first boot and when renewing certificates.
+
+With the default `kAtRestWrapRequired = true`, that first `import` also burns eFuse `BLK_KEY5` and
+stores both files encrypted. The burn is permanent and happens once per device; see
+[Notes and Limitations](#notes-and-limitations).
 
 The certificate must be ECDSA and list the device's domain name in its **Subject Alternative Name (SAN)**.  
 Example, for
@@ -302,5 +307,18 @@ so it can't open the admin console to the public internet.
   fragments, so only oversized diagnostic pings are affected. Set `kEthL2GateEnable = false`
   to fall back to request-level enforcement only
 - 16,384 entry real-time blocklist capacity
+- TLS material is encrypted at rest by default. On the first `import` the device burns eFuse
+  `BLK_KEY5` (permanent, once per device) and stores the certificate and private key AES-256-GCM
+  encrypted in the `nvs_tls` partition, which is erased when material is sealed so no obsolete
+  plaintext record can survive there. The burn never repeats - a renewed certificate is re-sealed
+  under the same key. `BLK_KEY5` is the only key block this project uses, leaving `KEY0`..`KEY4`
+  free for flash encryption or secure boot. `wrap-status` reports the state, and `wrap-key`
+  performs the same burn by hand for a device whose material was imported earlier. Set
+  `kAtRestWrapRequired = false` only if you must store the key in plaintext; note that a unit
+  which previously stored material in plaintext must be fully erased (`esptool.py erase_flash`)
+  and re-flashed before enabling this, or the old private key stays recoverable from the legacy
+  partition. There is intentionally no coredump partition (a panic image would write the key from
+  RAM to unencrypted flash), so the boot log shows `No core dump partition found!` twice - that
+  is expected
 - Enrollment is gated only by the admin's **source IP** (`kAdminIPs` in Config.h)
 - Authorized addresses expire on their own based on the  `kAuthorizedIPTtlMs` TTL value configured in Config.h
