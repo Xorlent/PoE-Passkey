@@ -1512,9 +1512,7 @@ void setup() {
     // by the default 256-byte ring buffer during a fast USB CDC burst.
     Serial.setRxBufferSize(8192);
     Serial.begin(115200);
-    while (!Serial) {
-        delay(100);
-    }
+    delay(500);
 
     // Allocate the PSRAM log ring before the first diagnostic line, so it is captured.
     log_begin();
